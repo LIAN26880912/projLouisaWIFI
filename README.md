@@ -29,6 +29,19 @@ Louisa Wi-Fi 會認出你在哪一家店，自動換上那家店的密碼。全�
 - 🔄 **自動更新**：有新版本或新門市時，☕ 選單會提醒你，點一下就更新好。
 - 🔒 **資料只在你的 Mac 上**：不需要帳號，不會上傳任何資料。
 
+## Windows 版（開發中）
+
+Windows 版目前支援搜尋門市、手動選店，以及使用門市資料中的候選密碼或輸入店內公告的密碼連線。自動定位、自動連線、使用統計、登入啟動與正式安裝尚未完成；目前需要 Windows 10 2004（build 19041）或更新版本，以及 .NET 10 SDK。
+
+在 Windows 上開發或測試：
+
+```powershell
+dotnet test windows\LouisaWiFi.Windows.slnx
+dotnet run --project windows\src\LouisaWiFi.Windows\LouisaWiFi.Windows.csproj
+```
+
+此版本會改寫 Windows 名為 `LouisaCoffee` 的 Wi-Fi 設定檔；連線失敗會還原原本設定。請只在你有權使用的網路上測試。
+
 <p align="center"><img src="docs/screenshot-stats-month.png" width="700" alt="連線統計：每月時數"><br><sub>連線統計：點方格看當天去了哪家，下方可以切換門市、月份、年份。</sub></p>
 
 ## 安裝

@@ -1,4 +1,6 @@
 using LouisaWiFi.Windows.UI;
+using LouisaWiFi.Windows.Platform;
+using LouisaWiFi.Windows.Services;
 
 namespace LouisaWiFi.Windows;
 
@@ -8,6 +10,14 @@ static class Program
     static void Main()
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayApp());
+        try
+        {
+            var connector = new Connector(new NativeWifiAdapter(), new LearnedStore(), new SecretStore());
+            Application.Run(new TrayApp(connector));
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show(error.Message, "Louisa Wi-Fi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }

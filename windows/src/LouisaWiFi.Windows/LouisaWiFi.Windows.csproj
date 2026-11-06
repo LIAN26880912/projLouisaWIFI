@@ -16,6 +16,11 @@
     <!-- Shared with the macOS app; never copy these into windows\. -->
     <EmbeddedResource Include="..\..\..\data\stores.json" LogicalName="stores.json" Link="stores.json" />
     <EmbeddedResource Include="..\..\..\app\AppIcon.png" LogicalName="AppIcon.png" Link="AppIcon.png" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ManagedNativeWifi" Version="3.1.0" />
   </ItemGroup>
 
 </Project>
