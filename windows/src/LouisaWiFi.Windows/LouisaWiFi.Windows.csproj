@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>LouisaWiFi</AssemblyName>
+    <RootNamespace>LouisaWiFi.Windows</RootNamespace>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shared with the macOS app; never copy these into windows\. -->
+    <EmbeddedResource Include="..\..\..\data\stores.json" LogicalName="stores.json" Link="stores.json" />
+    <EmbeddedResource Include="..\..\..\app\AppIcon.png" LogicalName="AppIcon.png" Link="AppIcon.png" />
+  </ItemGroup>
+
+</Project>

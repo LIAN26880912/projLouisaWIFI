@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LouisaWiFi.Windows/LouisaWiFi.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LouisaWiFi.Windows.Tests/LouisaWiFi.Windows.Tests.csproj" />
+  </Folder>
+</Solution>
