@@ -38,7 +38,7 @@ sealed class StorePicker : Form
         manual.Click += (_, _) =>
         {
             if (SelectedStore is null) return;
-            Password = PasswordDialog.Ask(this);
+            Password = PasswordDialog.Ask(this, SelectedStore.Name);
             if (Password is not null) DialogResult = DialogResult.OK;
         };
         CancelButton = cancel;

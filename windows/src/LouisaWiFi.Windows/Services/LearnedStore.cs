@@ -21,10 +21,9 @@ public sealed class LearnedStore : ILearnedStore
     public LearnedStore(string? path = null)
     {
         this.path = path ?? Path.Combine(StoragePaths.Root, "learned.json");
-        entries = File.Exists(this.path)
-            ? JsonSerializer.Deserialize<Dictionary<string, LearnedEntry>>(File.ReadAllText(this.path), json)
-                ?? throw new InvalidDataException("learned.json is empty.")
-            : new Dictionary<string, LearnedEntry>(StringComparer.OrdinalIgnoreCase);
+        entries = new Dictionary<string, LearnedEntry>(
+            JsonFile.Load<Dictionary<string, LearnedEntry>>(this.path, json) ?? [],
+            StringComparer.OrdinalIgnoreCase);
     }
 
     public IReadOnlyDictionary<string, LearnedEntry> All
@@ -71,4 +70,31 @@ internal static class AtomicWrite
 
     public static void Write(string path, string contents) =>
         Write(path, System.Text.Encoding.UTF8.GetBytes(contents));
+}
+
+/// A damaged data file must not stop the app: keep a copy as *.bad, start from defaults and report it.
+internal static class JsonFile
+{
+    public static readonly System.Collections.Concurrent.ConcurrentQueue<string> Recovered = new();
+
+    public static T? Load<T>(string path, JsonSerializerOptions options) where T : class
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<T>(File.ReadAllText(path), options)
+                ?? throw new JsonException("empty document");
+        }
+        catch (JsonException)
+        {
+            Quarantine(path);
+            return null;
+        }
+    }
+
+    public static void Quarantine(string path)
+    {
+        File.Move(path, path + ".bad", overwrite: true);
+        Recovered.Enqueue($"{Path.GetFileName(path)} 已損毀，已備份為 {Path.GetFileName(path)}.bad 並改用預設值。");
+    }
 }

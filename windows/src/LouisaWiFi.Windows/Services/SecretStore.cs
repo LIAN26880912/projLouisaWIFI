@@ -48,12 +48,24 @@ public sealed class SecretStore : ISecretStore
     private Dictionary<string, string> Read()
     {
         if (!File.Exists(path)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var encrypted = File.ReadAllBytes(path);
-        var plain = ProtectedData.Unprotect(encrypted, entropy, DataProtectionScope.CurrentUser);
+        byte[] plain;
+        try { plain = ProtectedData.Unprotect(File.ReadAllBytes(path), entropy, DataProtectionScope.CurrentUser); }
+        catch (CryptographicException)
+        {
+            // Unreadable by this Windows account (damaged or copied from elsewhere): the passwords are lost either way.
+            JsonFile.Quarantine(path);
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(plain, json)
-                ?? throw new InvalidDataException("secrets.bin is empty.");
+            return new Dictionary<string, string>(
+                JsonSerializer.Deserialize<Dictionary<string, string>>(plain, json) ?? throw new JsonException("empty"),
+                StringComparer.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            JsonFile.Quarantine(path);
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
         finally
         {

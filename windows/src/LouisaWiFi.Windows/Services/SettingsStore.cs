@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace LouisaWiFi.Windows.Services;
 
-public sealed record AppSettings(bool AutoConnect = true);
+public sealed record AppSettings(bool AutoConnect = true, bool OnlyKnown = false);
 
 public sealed class SettingsStore
 {
@@ -13,17 +13,17 @@ public sealed class SettingsStore
     public SettingsStore(string? path = null)
     {
         this.path = path ?? Path.Combine(StoragePaths.Root, "settings.json");
-        settings = File.Exists(this.path)
-            ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(this.path), json)
-                ?? throw new InvalidDataException("settings.json is empty.")
-            : new AppSettings();
+        settings = JsonFile.Load<AppSettings>(this.path, json) ?? new AppSettings();
     }
 
     public bool AutoConnect => settings.AutoConnect;
+    public bool OnlyKnown => settings.OnlyKnown;
 
-    public void SetAutoConnect(bool enabled)
+    public void SetAutoConnect(bool enabled) => Save(settings with { AutoConnect = enabled });
+    public void SetOnlyKnown(bool enabled) => Save(settings with { OnlyKnown = enabled });
+
+    private void Save(AppSettings next)
     {
-        var next = settings with { AutoConnect = enabled };
         AtomicWrite.Write(path, JsonSerializer.Serialize(next, json));
         settings = next;
     }

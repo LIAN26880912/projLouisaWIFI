@@ -4,20 +4,21 @@ sealed class PasswordDialog : Form
 {
     private readonly TextBox password = new() { Dock = DockStyle.Fill, UseSystemPasswordChar = true };
 
-    private PasswordDialog()
+    private PasswordDialog(string? storeName)
     {
         Text = "輸入 Wi-Fi 密碼";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;
         MaximizeBox = false;
+        TopMost = true;
         ClientSize = new Size(360, 105);
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 3 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(new Label { Text = "請輸入店內公告的 Wi-Fi 密碼：", AutoSize = true });
+        layout.Controls.Add(new Label { Text = $"請輸入{storeName}店內公告的 Wi-Fi 密碼：", AutoSize = true });
         layout.Controls.Add(password);
 
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill };
@@ -31,11 +32,13 @@ sealed class PasswordDialog : Form
         CancelButton = cancel;
     }
 
-    public static string? Ask(IWin32Window owner)
+    public static string? Ask(IWin32Window? owner, string? storeName = null)
     {
-        using var dialog = new PasswordDialog();
-        return dialog.ShowDialog(owner) == DialogResult.OK && dialog.password.Text.Length > 0
-            ? dialog.password.Text
-            : null;
+        using var dialog = new PasswordDialog(storeName);
+        if (owner is null) dialog.StartPosition = FormStartPosition.CenterScreen;
+        if (dialog.ShowDialog(owner) != DialogResult.OK) return null;
+        // Same as macOS: whitespace around a copied password is never part of it.
+        var password = dialog.password.Text.Trim();
+        return password.Length > 0 ? password : null;
     }
 }

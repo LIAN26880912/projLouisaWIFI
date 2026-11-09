@@ -188,6 +188,40 @@ public class AutoConnectTests
     }
 
     [Fact]
+    public async Task ConnectNearestIgnoresSnoozeAndQuietPeriod()
+    {
+        var clock = new Clock();
+        var store = StoreAt("附近", 25.001, "wrong", "right");
+        var wifi = new FakeWifi();
+        var location = new FakeLocation { Result = new LocationResult(Fix(clock.Now), null) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), clock);
+
+        Assert.Equal(WifiStatus.Failed, (await connector.AutoConnectAsync(location, [store]))?.Status);
+        clock.Now = start.AddSeconds(1);
+        Assert.Null(await connector.AutoConnectAsync(location, [store]));
+
+        wifi.SuccessPassword = "right";
+        var result = await connector.ConnectNearestAsync(location, [store]);
+        Assert.Equal(WifiStatus.Connected, result.Status);
+        Assert.Equal("附近", result.StoreName);
+        Assert.Equal(["wrong", "right", "wrong", "right"], wifi.Tried.Select(item => item.Password));
+        Assert.Equal(["附近"], connector.KnownStores());
+        Assert.Equal("附近", connector.CurrentStore());
+    }
+
+    [Fact]
+    public void CurrentStoreDistinguishesUnknownLouisaFromOtherNetworks()
+    {
+        var wifi = new FakeWifi();
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+        Assert.Null(connector.CurrentStore());
+        wifi.Current = new WifiConnection("OtherWiFi", Bssid);
+        Assert.Null(connector.CurrentStore());
+        wifi.Current = new WifiConnection("LouisaCoffee", null);
+        Assert.Equal("", connector.CurrentStore());
+    }
+
+    [Fact]
     public async Task FailedBssidIsSuppressedForTenMinutes()
     {
         var clock = new Clock();

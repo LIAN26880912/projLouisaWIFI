@@ -46,6 +46,12 @@ public sealed class LocationService : ILocationProvider, IDisposable
 
     public event Action? Changed;
 
+    /// Cached position for the menu's distances; null when missing, stale or too coarse.
+    public LocationFix? LastUsableFix
+    {
+        get { lock (gate) return lastFix?.IsUsable(DateTimeOffset.UtcNow) == true ? lastFix : null; }
+    }
+
     public LocationPermission Permission
     {
         get

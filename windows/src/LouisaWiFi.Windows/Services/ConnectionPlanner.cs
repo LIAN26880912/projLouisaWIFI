@@ -108,7 +108,29 @@ public sealed class Connector
         ILocationProvider location,
         IReadOnlyList<Store> stores,
         CancellationToken cancellationToken = default) =>
-        RunAsync(true, token => AutoConnectCoreAsync(location, stores, token), cancellationToken);
+        RunAsync(true, token => AutoConnectCoreAsync(location, stores, manual: false, token), cancellationToken);
+
+    /// Menu/CLI "nearest store": same search as auto-connect, but a user action, so it ignores snoozes and the switch.
+    public async Task<WifiResult> ConnectNearestAsync(
+        ILocationProvider location,
+        IReadOnlyList<Store> stores,
+        CancellationToken cancellationToken = default) =>
+        await RunAsync(false, token => AutoConnectCoreAsync(location, stores, manual: true, token), cancellationToken)
+            ?? throw new InvalidOperationException("手動連線未執行。");
+
+    /// Store names that have worked here before (learned base stations).
+    public IReadOnlySet<string> KnownStores() =>
+        learned.All.Values.Select(entry => entry.StoreName).ToHashSet(StringComparer.Ordinal);
+
+    /// Learned store for the LouisaCoffee network we're on; "" when on LouisaCoffee but unknown; null otherwise.
+    public string? CurrentStore()
+    {
+        var current = wifi.Current;
+        if (current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) != true) return null;
+        return current.Bssid is not null && learned.All.TryGetValue(LearnedStore.Normalize(current.Bssid), out var entry)
+            ? entry.StoreName
+            : "";
+    }
 
     public void CancelAutomatic()
     {
@@ -205,11 +227,13 @@ public sealed class Connector
     private async Task<WifiResult?> AutoConnectCoreAsync(
         ILocationProvider location,
         IReadOnlyList<Store> stores,
+        bool manual,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var now = clock.GetUtcNow();
-        if (now < quietUntil) return null;
+        if (manual) snoozed.Clear();
+        else if (now < quietUntil) return null;
         var current = wifi.Current;
         if (current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
             return CurrentLouisa(current);

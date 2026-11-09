@@ -31,7 +31,7 @@ Louisa Wi-Fi 會認出你在哪一家店，自動換上那家店的密碼。全�
 
 ## Windows 版（開發中）
 
-Windows 版目前支援自動連線、搜尋與手動選店，以及輸入店內公告的密碼。使用統計、登入啟動、命令列和正式安裝尚未完成；目前需要 Windows 10 2004（build 19041）或更新版本，以及 .NET 10 SDK。
+Windows 版目前支援自動連線、附近門市與依城市選店、搜尋門市、輸入店內公告的密碼、連線統計、登入時開啟與命令列。正式安裝包與自動更新尚未完成；目前需要 Windows 10 2004（build 19041）或更新版本，以及 .NET 10 SDK。
 
 在 Windows 上開發或測試：
 
@@ -45,6 +45,19 @@ dotnet run --project windows\src\LouisaWiFi.Windows\LouisaWiFi.Windows.csproj
 首次需要定位或 Wi-Fi 資訊時，請依提示允許 Windows 的定位權限；也可從系統匣選單開啟定位設定。較新的 Windows 可能在定位未獲授權時，同時禁止掃描及讀取 Wi-Fi 基地台。若已授權但離線或暫時無法取得定位，程式仍可使用已學習的基地台；若未授權，手動選店會嘗試不指定基地台連線，但能否成功取決於 Windows 和網卡，且無法記住基地台。
 
 自動連線不會切換已在使用的 Wi-Fi 或已有網際網路的連線；手動連線也不會中斷已可上網的連線。此版本會改寫 Windows 名為 `LouisaCoffee` 的 Wi-Fi 設定檔；連線失敗會嘗試還原原本設定。Windows 更新設定檔時可能暫時中斷並重新連線；若偵測到已連上但自動連線設定無法穩定保留，程式會保留連線並顯示提醒。設定與已學習資料放在 `%LOCALAPPDATA%\LouisaWiFi\`，手動輸入的密碼以 Windows DPAPI 保護。請只在你有權使用的網路上測試。
+
+系統匣選單與 Mac 版相近：有定位時列出附近 6 家門市並可「用密碼連線」最近一家，沒有定位時可「連線到最近的門市」；另有「所有門市」（依城市分組）、「搜尋門市…」、「連線統計…」，以及「自動連線」、「只顯示連過的門市」、「登入時開啟」三個開關。「登入時開啟」只在直接執行 `LouisaWiFi.exe` 時可用（寫入目前使用者的「啟動」項目；移動 exe 後請重新勾選）。
+
+同一使用者只會執行一個實例；再次執行時，指令會轉交給已在執行的程式，結果以系統通知顯示：
+
+```powershell
+LouisaWiFi.exe --nearest            # 連線到最近的門市（忽略自動連線的暫停）
+LouisaWiFi.exe --connect 金城延和   # 連線到指定門市，可省略「門市」
+LouisaWiFi.exe --stats              # 開啟連線統計
+LouisaWiFi.exe --show               # 顯示目前狀態
+```
+
+連線統計記在 `usage.json`，格式與 Mac 版相同（連上 `LouisaCoffee` 時每分鐘累計）。程式記錄寫在同一資料夾的 `LouisaWiFi.log`（不含密碼、基地台或座標）。若設定或資料檔損毀，程式會將其改名為 `*.bad` 保留、改用預設值繼續執行並顯示通知。
 
 <p align="center"><img src="docs/screenshot-stats-month.png" width="700" alt="連線統計：每月時數"><br><sub>連線統計：點方格看當天去了哪家，下方可以切換門市、月份、年份。</sub></p>
 
