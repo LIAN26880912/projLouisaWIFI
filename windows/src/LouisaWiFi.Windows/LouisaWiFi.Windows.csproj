@@ -23,4 +23,8 @@
     <PackageReference Include="ManagedNativeWifi" Version="3.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="LouisaWiFi.Windows.Tests" />
+  </ItemGroup>
+
 </Project>

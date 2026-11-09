@@ -10,6 +10,7 @@ public class ConnectorTests
     {
         public WifiConnection? Current { get; set; }
         public bool HasInternet { get; set; }
+        public bool CanReadBssid { get; set; } = true;
         public int Scans { get; private set; }
         public int Restores { get; private set; }
         public WifiProfileBackup? Restored { get; private set; }
@@ -29,7 +30,7 @@ public class ConnectorTests
 
         public WifiProfileBackup? CaptureLouisaProfile() => new("<old />", 9);
 
-        public Task<bool> ConnectAsync(string password, string bssid, CancellationToken cancellationToken)
+        public Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Tried.Add(password);
@@ -178,12 +179,13 @@ public class ConnectorTests
     {
         public WifiConnection? Current { get; private set; }
         public bool HasInternet => false;
+        public bool CanReadBssid => true;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<string> Tried { get; } = [];
         public Task<WifiScan> ScanAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new WifiScan([new WifiAccessPoint("AA:BB:CC:DD:EE:01", -50)]));
         public WifiProfileBackup? CaptureLouisaProfile() => null;
-        public async Task<bool> ConnectAsync(string password, string bssid, CancellationToken cancellationToken)
+        public async Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
         {
             Tried.Add(password);
             if (password == "first")

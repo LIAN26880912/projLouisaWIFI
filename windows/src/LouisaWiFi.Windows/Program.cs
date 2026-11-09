@@ -12,8 +12,10 @@ static class Program
         ApplicationConfiguration.Initialize();
         try
         {
-            var connector = new Connector(new NativeWifiAdapter(), new LearnedStore(), new SecretStore());
-            Application.Run(new TrayApp(connector));
+            using var location = new LocationService();
+            var wifi = new NativeWifiAdapter();
+            var connector = new Connector(wifi, new LearnedStore(), new SecretStore());
+            Application.Run(new TrayApp(connector, wifi, location, new SettingsStore()));
         }
         catch (Exception error)
         {

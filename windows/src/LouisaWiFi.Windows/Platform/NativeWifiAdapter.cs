@@ -1,21 +1,33 @@
 using ManagedNativeWifi;
 using System.Net.NetworkInformation;
 using Windows.Networking.Connectivity;
+using Windows.Security.Authorization.AppCapabilityAccess;
 
 namespace LouisaWiFi.Windows.Platform;
 
 public sealed class NativeWifiAdapter : IWifi
 {
     private const string LouisaSsid = "LouisaCoffee";
+    private readonly AppCapability wifiCapability = AppCapability.Create("wiFiControl");
 
     public WifiConnection? Current
     {
         get
         {
-            var result = NativeWifi.GetCurrentConnection(InterfaceId());
-            return result.Item2 is { } connection && !string.IsNullOrEmpty(connection.Ssid.ToString())
-                ? new WifiConnection(connection.Ssid.ToString(), connection.Bssid.ToString())
-                : null;
+            var id = NativeWifi.EnumerateInterfaceConnections().FirstOrDefault(i => i.IsRadioOn)?.Id;
+            if (id is null) return null;
+            if (CanReadBssid)
+            {
+                var result = NativeWifi.GetCurrentConnection(id.Value);
+                if (result.Item2 is { } connection && !string.IsNullOrEmpty(connection.Ssid.ToString()))
+                    return new WifiConnection(connection.Ssid.ToString(), connection.Bssid.ToString());
+            }
+
+            var ssid = NetworkInformation.GetConnectionProfiles()
+                .Where(profile => profile.IsWlanConnectionProfile)
+                .Select(profile => profile.WlanConnectionProfileDetails?.GetConnectedSsid())
+                .FirstOrDefault(name => !string.IsNullOrEmpty(name));
+            return ssid is null ? null : new WifiConnection(ssid, null);
         }
     }
 
@@ -23,12 +35,32 @@ public sealed class NativeWifiAdapter : IWifi
         NetworkInformation.GetInternetConnectionProfile()?.GetNetworkConnectivityLevel()
         == NetworkConnectivityLevel.InternetAccess;
 
+    public bool CanReadBssid => wifiCapability.CheckAccess() is
+        AppCapabilityAccessStatus.Allowed or AppCapabilityAccessStatus.NotDeclaredByApp;
+
     public async Task<WifiScan> ScanAsync(CancellationToken cancellationToken)
     {
-        _ = InterfaceId();
-        await NativeWifi.ScanNetworksAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        var id = InterfaceId();
+        if (!CanReadBssid)
+            throw new UnauthorizedAccessException("Windows 未授權讀取附近的 Wi-Fi 基地台。");
+
+        var scanned = await NativeWifi.ScanNetworksAsync(TimeSpan.FromSeconds(10), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var points = NativeWifi.EnumerateBssNetworks()
+        if (!scanned.Contains(id))
+        {
+            if (!CanReadBssid)
+                throw new UnauthorizedAccessException("Windows 未授權讀取附近的 Wi-Fi 基地台。");
+            throw new InvalidOperationException("Windows 無法完成 Wi-Fi 掃描，請確認無線網卡與定位權限。");
+        }
+
+        var (result, networks) = NativeWifi.EnumerateBssNetworks(id);
+        if (result != ActionResult.Success || networks is null)
+        {
+            if (!CanReadBssid)
+                throw new UnauthorizedAccessException("Windows 未授權讀取附近的 Wi-Fi 基地台。");
+            throw new InvalidOperationException("Windows 無法讀取 Wi-Fi 掃描結果。");
+        }
+        var points = networks
             .Where(n => n.Ssid.ToString().Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase))
             .Select(n => new WifiAccessPoint(n.Bssid.ToString(), n.Rssi))
             .OrderByDescending(n => n.Rssi)
@@ -44,38 +76,69 @@ public sealed class NativeWifiAdapter : IWifi
         return profile is null ? null : new WifiProfileBackup(profile.Document.Xml, profile.Position);
     }
 
-    public async Task<bool> ConnectAsync(string password, string bssid, CancellationToken cancellationToken)
+    public async Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
     {
         var id = InterfaceId();
         var xml = ProfileXml.Build(LouisaSsid, password, autoConnect: false);
         if (!NativeWifi.SetProfile(id, ProfileType.AllUser, xml, null, overwrite: true))
             throw new InvalidOperationException("Windows 無法更新 LouisaCoffee 的 Wi-Fi 設定。");
 
-        NetworkIdentifier targetBssid = PhysicalAddress.Parse(bssid);
-        var connected = await NativeWifi.ConnectNetworkAsync(
-            id, LouisaSsid, BssType.Infrastructure, targetBssid,
-            TimeSpan.FromSeconds(35), cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!connected) return false;
+        using (var watcher = AcmConnectionWatcher.Register(id, LouisaSsid))
+        {
+            var target = bssid is null ? null : (NetworkIdentifier)PhysicalAddress.Parse(bssid);
+            if (!NativeWifi.ConnectNetwork(id, LouisaSsid, BssType.Infrastructure, target)) return false;
+            if (!await watcher.WaitAsync(TimeSpan.FromSeconds(35), cancellationToken)) return false;
+        }
 
         var autoXml = ProfileXml.Build(LouisaSsid, password, autoConnect: true);
-        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-        for (var i = 0; i < 5; i++)
-        {
-            if (IsAutoConnectEnabled(id)) break;
-            if (!NativeWifi.SetProfile(id, ProfileType.AllUser, autoXml, null, overwrite: true))
-                throw new InvalidOperationException("連線成功，但 Windows 無法恢復 Wi-Fi 自動連線設定。");
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-        }
-        if (!IsAutoConnectEnabled(id))
-            throw new InvalidOperationException("已連線，但 Windows 未保留 Wi-Fi 自動連線設定。");
+        var stable = await WaitForStableAutoConnectAsync(
+            () => Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true,
+            () => IsAutoConnectEnabled(id),
+            () =>
+            {
+                if (!NativeWifi.SetProfile(id, ProfileType.AllUser, autoXml, null, overwrite: true))
+                    throw new InvalidOperationException("連線成功，但 Windows 無法恢復 Wi-Fi 自動連線設定。");
+            },
+            token => Task.Delay(TimeSpan.FromSeconds(1), token),
+            cancellationToken);
+        if (!stable && Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
+            throw new InvalidOperationException("已連上 LouisaCoffee，但 Windows 未穩定保留 Wi-Fi 自動連線設定。");
+        return stable;
+    }
 
+    internal static async Task<bool> WaitForStableAutoConnectAsync(
+        Func<bool> isConnected,
+        Func<bool> isAutoConnectEnabled,
+        Action enableAutoConnect,
+        Func<CancellationToken, Task> wait,
+        CancellationToken cancellationToken)
+    {
+        var connectedPolls = 0;
+        var automaticPolls = 0;
+        var profileUpdated = false;
         for (var i = 0; i < 30; i++)
         {
+            await wait(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
-                return true;
-            await Task.Delay(500, cancellationToken);
+            if (!isConnected())
+            {
+                connectedPolls = 0;
+                automaticPolls = 0;
+                continue;
+            }
+            connectedPolls++;
+            if (isAutoConnectEnabled())
+            {
+                if (++automaticPolls == 5) return true;
+                continue;
+            }
+            automaticPolls = 0;
+            // Rewriting a connected profile can force Windows to disconnect.
+            if (connectedPolls >= 5 && !profileUpdated)
+            {
+                enableAutoConnect();
+                profileUpdated = true;
+            }
         }
         return false;
     }
