@@ -102,7 +102,7 @@ public sealed class NativeWifiAdapter : IWifi
             token => Task.Delay(TimeSpan.FromSeconds(1), token),
             cancellationToken);
         if (!stable && Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
-            throw new InvalidOperationException("已連上 LouisaCoffee，但 Windows 未穩定保留 Wi-Fi 自動連線設定。");
+            throw new AutoConnectNotKeptException();
         return stable;
     }
 

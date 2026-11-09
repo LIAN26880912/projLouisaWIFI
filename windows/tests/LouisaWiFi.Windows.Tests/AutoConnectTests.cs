@@ -188,6 +188,30 @@ public class AutoConnectTests
     }
 
     [Fact]
+    public async Task StoreIsLearnedWhenWindowsKeepsTheProfileManual()
+    {
+        var store = StoreAt("附近", 25.001, "wrong", "right");
+        var wifi = new FakeWifi();
+        wifi.ConnectHandler = (password, _) =>
+        {
+            if (password != "right") return Task.FromResult(false);
+            wifi.Current = new WifiConnection("LouisaCoffee", Bssid);
+            throw new AutoConnectNotKeptException();
+        };
+        var learned = new MemoryLearned();
+        var location = new FakeLocation { Result = new LocationResult(Fix(start), null) };
+        var connector = new Connector(wifi, learned, new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(location, [store]);
+
+        Assert.Equal(WifiStatus.Connected, result?.Status);
+        Assert.Equal("附近", result?.StoreName);
+        Assert.Contains("未保留自動連線", result?.Message);
+        Assert.Equal("附近", connector.CurrentStore());
+        Assert.Equal(0, wifi.Restores);
+    }
+
+    [Fact]
     public async Task ConnectNearestIgnoresSnoozeAndQuietPeriod()
     {
         var clock = new Clock();
