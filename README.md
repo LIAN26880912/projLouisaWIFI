@@ -31,9 +31,15 @@ Louisa Wi-Fi 會認出你在哪一家店，自動換上那家店的密碼。全�
 
 ## Windows 版（開發中）
 
-Windows 版目前支援自動連線、附近門市與依城市選店、搜尋門市、輸入店內公告的密碼、連線統計、登入時開啟與命令列。正式安裝包與自動更新尚未完成；目前需要 Windows 10 2004（build 19041）或更新版本，以及 .NET 10 SDK。
+Windows 版目前支援自動連線、附近門市與依城市選店、搜尋門市、輸入店內公告的密碼、連線統計、登入時開啟、命令列與自動更新；需要 Windows 10 2004（build 19041）或更新版本。
 
-在 Windows 上開發或測試：
+**安裝（fork 發佈 release 後）**：從 [Releases](https://github.com/LIAN26880912/projLouisaWIFI/releases/latest) 下載 `LouisaWiFi-windows-x64.zip`（ARM 電腦用 `-arm64`），解壓縮到例如 `%LOCALAPPDATA%\Programs\LouisaWiFi\` 後執行 `LouisaWiFi.exe`，不需另外安裝 .NET。目前未做程式碼簽章，第一次執行若出現 SmartScreen，請按「其他資訊」→「仍要執行」。
+
+**自動更新**：發佈版啟動 30 秒後、之後每 6 小時檢查一次 fork 的最新 release，有新版會通知，從選單選「更新到 X」即可；也可選「檢查更新」手動檢查。下載檔會以 GitHub 提供的 SHA-256 驗證並確認版本，替換後自動重啟；新版若無法啟動會還原原本版本。程式放在無法寫入的位置（例如 Program Files）時，只會開啟下載頁，不會要求系統管理員權限。開發中的建置只在手動選「檢查更新」時檢查，也不會替換自己。
+
+**版本與發佈（維護者）**：Windows 與 Mac 共用同一個 tag，`release.yml` 會在同一個 release 附上兩種 Windows zip；只有 fork 的 Windows 修正使用第 4 碼（例如 `v0.1.6.1`）。fork 上的 `sync-upstream.yml` 每週一 12:00（台灣時間）檢查上游新 tag，合併後打同名 tag 並發佈；門市資料隨上游更新，`refresh-stores.yml` 只在上游執行。fork 需先在 GitHub 的 Actions 頁面啟用 workflow 才會排程執行。
+
+在 Windows 上開發或測試（需要 .NET 10 SDK）：
 
 ```powershell
 dotnet test windows\LouisaWiFi.Windows.slnx
