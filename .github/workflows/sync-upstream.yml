@@ -1,0 +1,44 @@
+# Forks only: weekly, after upstream's store refresh, take its newest release tag
+# (merge upstream main, push the same tag) and publish macOS + Windows builds here.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"  # Mondays 12:00 Taiwan time
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository != 'madeyexz/louisa-wifi'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: tag
+        run: |
+          git remote add upstream https://github.com/madeyexz/louisa-wifi.git
+          tag=$(git ls-remote --tags --refs upstream 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          [ -n "$tag" ] || exit 0
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null && exit 0
+          git fetch --no-tags upstream "refs/tags/$tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A conflict fails the job (GitHub emails you); merge by hand, then re-run.
+          git merge --no-edit -m "Merge upstream $tag" FETCH_HEAD
+          git tag "$tag"
+          git push origin HEAD "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # Tags pushed with GITHUB_TOKEN don't trigger other workflows, so call the release directly.
+  release:
+    needs: sync
+    if: needs.sync.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.sync.outputs.tag }}

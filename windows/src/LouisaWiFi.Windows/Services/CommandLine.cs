@@ -1,6 +1,6 @@
 namespace LouisaWiFi.Windows.Services;
 
-public enum CommandKind { Show, Nearest, Connect, Stats }
+public enum CommandKind { Show, Nearest, Connect, Stats, Updated, UpdateFailed }
 
 public sealed record AppCommand(CommandKind Kind, string? Store = null);
 
@@ -19,6 +19,9 @@ public static class CommandLine
             "--nearest" when args.Count == 1 => (new AppCommand(CommandKind.Nearest), null),
             "--show" when args.Count == 1 => (new AppCommand(CommandKind.Show), null),
             "--stats" when args.Count == 1 => (new AppCommand(CommandKind.Stats), null),
+            // Passed by the updater to the version it just started.
+            "--updated" when args.Count == 1 => (new AppCommand(CommandKind.Updated), null),
+            "--update-failed" when args.Count == 1 => (new AppCommand(CommandKind.UpdateFailed), null),
             "--connect" when args.Count == 2 && !string.IsNullOrWhiteSpace(args[1]) && args[1].Length <= 100 =>
                 (new AppCommand(CommandKind.Connect, args[1].Trim()), null),
             _ => (null, "不支援的指令。" + Usage)

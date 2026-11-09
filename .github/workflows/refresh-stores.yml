@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   refresh:
+    # Forks take store updates from upstream instead (sync-upstream.yml).
+    if: github.repository == 'madeyexz/louisa-wifi'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}

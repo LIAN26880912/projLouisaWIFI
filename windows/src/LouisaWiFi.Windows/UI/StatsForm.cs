@@ -81,6 +81,12 @@ sealed class StatsForm : Form
         base.OnFormClosed(e);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) Icon?.Dispose();
+        base.Dispose(disposing);
+    }
+
     private void OnListActivated()
     {
         if (list.SelectedItems.Count == 0 || list.SelectedItems[0].Tag is not { } tag) return;

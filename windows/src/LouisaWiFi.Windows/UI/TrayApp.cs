@@ -2,6 +2,7 @@
 using LouisaWiFi.Windows.Platform;
 using LouisaWiFi.Windows.Services;
 using Microsoft.Win32;
+using System.Diagnostics;
 using System.Net.NetworkInformation;
 
 namespace LouisaWiFi.Windows.UI;
@@ -17,12 +18,16 @@ sealed class TrayApp : ApplicationContext
     private readonly SettingsStore settings;
     private readonly UsageTracker usage;
     private readonly LoginItem loginItem;
+    private readonly Updater updater;
+    private readonly SingleInstance? instance;
     private readonly SynchronizationContext uiContext;
     private readonly System.Windows.Forms.Timer timer;
     private readonly System.Windows.Forms.Timer usageTimer;
+    private readonly System.Windows.Forms.Timer updateTimer;
     private readonly CancellationTokenSource lifetime = new();
     private ToolStripMenuItem? status;
     private StatsForm? statsForm;
+    private AppRelease? available;
     private WifiResult? lastStatus;
     private string? lastBalloon;
     private long lastBalloonAt;
@@ -34,7 +39,7 @@ sealed class TrayApp : ApplicationContext
     private bool disposed;
 
     public TrayApp(Connector connector, IWifi wifi, LocationService location, SettingsStore settings,
-        UsageTracker usage, LoginItem loginItem, SingleInstance? instance, string[] startupArgs)
+        UsageTracker usage, LoginItem loginItem, Updater updater, SingleInstance? instance, string[] startupArgs)
     {
         this.connector = connector;
         this.wifi = wifi;
@@ -42,6 +47,8 @@ sealed class TrayApp : ApplicationContext
         this.settings = settings;
         this.usage = usage;
         this.loginItem = loginItem;
+        this.updater = updater;
+        this.instance = instance;
         uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         menu = new ContextMenuStrip();
         menu.Opening += (_, e) =>
@@ -62,6 +69,13 @@ sealed class TrayApp : ApplicationContext
         // Like macOS Tracker: a minute on LouisaCoffee per tick; timers don't run while asleep.
         usageTimer = new System.Windows.Forms.Timer { Interval = 60_000, Enabled = true };
         usageTimer.Tick += (_, _) => RecordUsage();
+        // Like macOS: check soon after start, then every 6 hours; dev builds only check from the menu.
+        updateTimer = new System.Windows.Forms.Timer { Interval = 30_000, Enabled = Updater.IsPublished };
+        updateTimer.Tick += (_, _) =>
+        {
+            updateTimer.Interval = 6 * 60 * 60 * 1000;
+            _ = CheckForUpdatesAsync(manual: false);
+        };
 
         _ = instance?.ListenAsync(args => uiContext.Post(_ => _ = RunCommandAsync(args), null), lifetime.Token);
         ReportRecoveredFiles();
@@ -134,6 +148,9 @@ sealed class TrayApp : ApplicationContext
         if (!loginItem.Supported) login.ToolTipText = "請直接執行 LouisaWiFi.exe 才能設定";
         items.Add(login);
         items.Add(new ToolStripSeparator());
+        if (available is { } release)
+            items.Add(Item($"更新到 {Updater.Display(release.Version)}", InstallUpdateAsync));
+        items.Add(Item($"檢查更新（目前 {Updater.Display(updater.Current)}）", () => CheckForUpdatesAsync(manual: true)));
         items.Add(Item("結束", ExitAsync));
     }
 
@@ -285,6 +302,16 @@ sealed class TrayApp : ApplicationContext
                 break;
             case CommandKind.Stats:
                 ShowStats();
+                break;
+            case CommandKind.Updated:
+                Notify($"已更新到 {Updater.Display(updater.Current)}");
+                // The previous exe is still exiting for a few seconds.
+                await Task.Delay(TimeSpan.FromSeconds(20));
+                CleanupUpdate();
+                break;
+            case CommandKind.UpdateFailed:
+                Notify("更新失敗，已還原為原本的版本。");
+                CleanupUpdate();
                 break;
             default:
                 Notify(lastStatus?.Message ?? "路易莎 Wi-Fi 正在背景執行，請從系統匣圖示操作。");
@@ -495,18 +522,123 @@ sealed class TrayApp : ApplicationContext
         }
     }
 
+    // MARK: - Updates
+
+    private static string UpdateFolder => Path.Combine(StoragePaths.Root, "update");
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (closing) return;
+        try
+        {
+            var release = await updater.CheckAsync(lifetime.Token);
+            if (release is null)
+            {
+                if (manual) Notify($"目前已是最新版本（{Updater.Display(updater.Current)}）");
+                return;
+            }
+            var version = Updater.Display(release.Version);
+            if (manual || available?.Version != release.Version)
+                Notify($"有新版本 {version}，請從選單選擇「更新到 {version}」");
+            available = release;
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            // Offline (e.g. before joining the café Wi-Fi) or rate-limited: try again next time.
+            AppLog.Write($"檢查更新失敗：{error.Message}");
+            if (manual) Notify("檢查更新失敗，請稍後再試。");
+        }
+    }
+
+    private async Task InstallUpdateAsync()
+    {
+        if (available is not { } release || closing) return;
+        if (automaticRunning || !BeginDialog())
+        {
+            Notify("正在連線，請稍後再更新。");
+            return;
+        }
+
+        var exe = Environment.ProcessPath;
+        var folder = exe is null ? null : Path.GetDirectoryName(exe);
+        if (!Updater.IsPublished || folder is null || !Updater.CanWrite(folder))
+        {
+            // Never elevate: e.g. under Program Files, just send the user to the download page.
+            manualRunning = false;
+            Process.Start(new ProcessStartInfo(release.Page.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+            Notify("無法自動更新這個位置的程式，已開啟下載頁。");
+            return;
+        }
+
+        string staging;
+        try
+        {
+            Notify($"正在下載 {Updater.Display(release.Version)}…");
+            var zip = await updater.DownloadAsync(release, UpdateFolder, lifetime.Token);
+            staging = Updater.Extract(zip, Path.Combine(UpdateFolder, "staging"), release.Version);
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
+        catch (Exception error)
+        {
+            manualRunning = false;
+            AppLog.Write($"更新失敗：{error.Message}");
+            Notify($"更新失敗：{error.Message}");
+            return;
+        }
+
+        AppLog.Write($"updating to {Updater.Display(release.Version)}");
+        await StopAsync();
+        try
+        {
+            Updater.Swap(folder, staging);
+            // Hand the single-instance lock to the new version before starting it.
+            instance?.Dispose();
+            using var started = Process.Start(new ProcessStartInfo(exe!, "--updated") { UseShellExecute = false })
+                ?? throw new InvalidOperationException("無法啟動新版本。");
+            if (await Task.Run(() => started.WaitForExit(8000)))
+                throw new InvalidOperationException($"新版本啟動後立即結束（代碼 {started.ExitCode}）。");
+        }
+        catch (Exception error)
+        {
+            AppLog.Write($"更新失敗，還原原本版本：{error}");
+            try
+            {
+                Updater.Rollback(folder);
+                Process.Start(new ProcessStartInfo(exe!, "--update-failed") { UseShellExecute = false })?.Dispose();
+            }
+            catch (Exception rollback)
+            {
+                AppLog.Write($"無法還原：{rollback}");
+            }
+        }
+        ExitThread();
+    }
+
+    private void CleanupUpdate()
+    {
+        if (Environment.ProcessPath is { } exe && Path.GetDirectoryName(exe) is { } folder)
+            Updater.Cleanup(folder, UpdateFolder);
+    }
+
     // MARK: - Exit
 
     private async Task ExitAsync()
     {
         if (closing) return;
+        await StopAsync();
+        ExitThread();
+    }
+
+    private async Task StopAsync()
+    {
         closing = true;
         timer.Stop();
         usageTimer.Stop();
+        updateTimer.Stop();
         location.SetWatching(false);
         lifetime.Cancel();
         await connector.CancelAndWaitAsync();
-        ExitThread();
     }
 
     protected override void ExitThreadCore()
@@ -517,6 +649,8 @@ sealed class TrayApp : ApplicationContext
         timer.Dispose();
         usageTimer.Stop();
         usageTimer.Dispose();
+        updateTimer.Stop();
+        updateTimer.Dispose();
         statsForm?.Close();
         location.SetWatching(false);
         location.Changed -= OnLocationChanged;
@@ -535,25 +669,9 @@ sealed class TrayApp : ApplicationContext
 
 static class AppIcon
 {
-    // shortcut: icon built from the shared 1024px PNG at runtime; ship a multi-size .ico in Phase 6.
     public static Icon Load()
     {
-        using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("AppIcon.png")!;
-        using var png = new Bitmap(stream);
-        using var small = new Bitmap(png, SystemInformation.SmallIconSize);
-        var handle = small.GetHicon();
-        try
-        {
-            using var borrowed = Icon.FromHandle(handle);
-            return (Icon)borrowed.Clone();
-        }
-        finally
-        {
-            DestroyIcon(handle);
-        }
+        using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("AppIcon.ico")!;
+        return new Icon(stream, SystemInformation.SmallIconSize);
     }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

@@ -25,3 +25,31 @@ jobs:
       - run: gh release create "$TAG" build/LouisaWiFi.zip raycast/louisa-wifi.js --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Adds LouisaWiFi-windows-{x64,arm64}.zip to the same release; the macOS updater only looks for LouisaWiFi.zip.
+  windows:
+    needs: release
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: windows/global.json
+      - run: dotnet test windows/LouisaWiFi.Windows.slnx --configuration Release
+      - shell: pwsh
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          foreach ($arch in 'x64', 'arm64') {
+            dotnet publish windows/src/LouisaWiFi.Windows/LouisaWiFi.Windows.csproj -c Release -r "win-$arch" `
+              --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+              -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:Version=$version -o "out/$arch"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            Compress-Archive "out/$arch/*" "LouisaWiFi-windows-$arch.zip"
+          }
+          gh release upload $env:TAG LouisaWiFi-windows-x64.zip LouisaWiFi-windows-arm64.zip
+        env:
+          GH_TOKEN: ${{ github.token }}

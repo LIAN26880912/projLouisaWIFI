@@ -28,7 +28,7 @@ static class Program
             var wifi = new NativeWifiAdapter();
             var connector = new Connector(wifi, new LearnedStore(), new SecretStore());
             Application.Run(new TrayApp(connector, wifi, location, new SettingsStore(), new UsageTracker(),
-                new LoginItem(), instance, args));
+                new LoginItem(), new Updater(), instance, args));
         }
         catch (Exception error)
         {

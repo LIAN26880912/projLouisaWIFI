@@ -10,12 +10,14 @@
     <AssemblyName>LouisaWiFi</AssemblyName>
     <RootNamespace>LouisaWiFi.Windows</RootNamespace>
     <Version>0.1.0</Version>
+    <!-- Generated from app\AppIcon.png (16–256 px PNG frames); regenerate if that file changes. -->
+    <ApplicationIcon>AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Shared with the macOS app; never copy these into windows\. -->
     <EmbeddedResource Include="..\..\..\data\stores.json" LogicalName="stores.json" Link="stores.json" />
-    <EmbeddedResource Include="..\..\..\app\AppIcon.png" LogicalName="AppIcon.png" Link="AppIcon.png" />
+    <EmbeddedResource Include="AppIcon.ico" LogicalName="AppIcon.ico" />
     <None Include="..\..\THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
