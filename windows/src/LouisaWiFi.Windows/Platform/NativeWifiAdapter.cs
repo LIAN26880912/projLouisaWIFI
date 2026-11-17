@@ -92,22 +92,29 @@ public sealed class NativeWifiAdapter : IWifi
         if (!NativeWifi.SetProfile(id, ProfileType.AllUser, xml, null, overwrite: true))
             throw new InvalidOperationException($"Windows 無法更新 {ssid} 的 Wi-Fi 設定。");
 
+        var target = bssid is null ? null : (NetworkIdentifier)PhysicalAddress.Parse(bssid);
         using (var watcher = AcmConnectionWatcher.Register(id, ssid))
         {
-            var target = bssid is null ? null : (NetworkIdentifier)PhysicalAddress.Parse(bssid);
             if (!NativeWifi.ConnectNetwork(id, ssid, BssType.Infrastructure, target)) return false;
             if (!await watcher.WaitAsync(TimeSpan.FromSeconds(35), cancellationToken)) return false;
         }
 
-        var autoXml = ProfileXml.Build(ssid, password, autoConnect: true);
         var stable = await WaitForStableAutoConnectAsync(
             () => Current?.Ssid == ssid,
             () => IsAutoConnectEnabled(id, ssid),
             () =>
             {
-                if (!NativeWifi.SetProfile(id, ProfileType.AllUser, autoXml, null, overwrite: true))
+                // Change only the mode of the stored (protected-key) profile, like netsh; a fresh XML counts
+                // as a new profile and Windows drops the link.
+                var document = NativeWifi.EnumerateProfiles()
+                    .FirstOrDefault(p => p.InterfaceInfo.Id == id && p.Name == ssid)?.Document.Clone()
+                    ?? new ProfileDocument(ProfileXml.Build(ssid, password, autoConnect: true));
+                document.IsAutoConnectEnabled = true;
+                if (!NativeWifi.SetProfile(id, ProfileType.AllUser, document.Xml, null, overwrite: true))
                     throw new InvalidOperationException("連線成功，但 Windows 無法恢復 Wi-Fi 自動連線設定。");
             },
+            // If it drops anyway, Windows may rejoin a higher-priority network such as a phone hotspot.
+            () => NativeWifi.ConnectNetwork(id, ssid, BssType.Infrastructure, target),
             token => Task.Delay(TimeSpan.FromSeconds(1), token),
             cancellationToken);
         if (!stable && Current?.Ssid == ssid)
@@ -119,12 +126,14 @@ public sealed class NativeWifiAdapter : IWifi
         Func<bool> isConnected,
         Func<bool> isAutoConnectEnabled,
         Action enableAutoConnect,
+        Action reconnect,
         Func<CancellationToken, Task> wait,
         CancellationToken cancellationToken)
     {
         var connectedPolls = 0;
         var automaticPolls = 0;
         var profileUpdated = false;
+        var reconnected = false;
         for (var i = 0; i < 30; i++)
         {
             await wait(cancellationToken);
@@ -133,6 +142,11 @@ public sealed class NativeWifiAdapter : IWifi
             {
                 connectedPolls = 0;
                 automaticPolls = 0;
+                if (profileUpdated && !reconnected)
+                {
+                    reconnect();
+                    reconnected = true;
+                }
                 continue;
             }
             connectedPolls++;

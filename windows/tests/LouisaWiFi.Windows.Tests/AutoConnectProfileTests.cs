@@ -19,6 +19,7 @@ public class AutoConnectProfileTests
                 repairs.Add(poll);
                 automatic = true;
             },
+            () => { },
             _ =>
             {
                 poll++;
@@ -47,6 +48,7 @@ public class AutoConnectProfileTests
                 repairs.Add(poll);
                 automatic = true;
             },
+            () => { },
             _ =>
             {
                 poll++;
@@ -68,6 +70,7 @@ public class AutoConnectProfileTests
             () => poll != 4,
             () => true,
             () => throw new InvalidOperationException("Unexpected profile change."),
+            () => { },
             _ =>
             {
                 poll++;
@@ -89,6 +92,7 @@ public class AutoConnectProfileTests
             () => true,
             () => false,
             () => repairs++,
+            () => { },
             _ =>
             {
                 poll++;
@@ -116,6 +120,7 @@ public class AutoConnectProfileTests
                 repairs++;
                 automatic = true;
             },
+            () => { },
             _ =>
             {
                 poll++;
@@ -130,6 +135,29 @@ public class AutoConnectProfileTests
     }
 
     [Fact]
+    public async Task DropAfterProfileChangeReconnectsOnce()
+    {
+        var poll = 0;
+        var automatic = false;
+        var reconnects = new List<int>();
+
+        var stable = await NativeWifiAdapter.WaitForStableAutoConnectAsync(
+            () => poll is not (7 or 8 or 9),
+            () => automatic,
+            () => automatic = true,
+            () => reconnects.Add(poll),
+            _ =>
+            {
+                poll++;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.True(stable);
+        Assert.Equal([7], reconnects);
+    }
+
+    [Fact]
     public async Task CancellationStopsTheStabilityCheck()
     {
         using var cancellation = new CancellationTokenSource();
@@ -138,6 +166,7 @@ public class AutoConnectProfileTests
             NativeWifiAdapter.WaitForStableAutoConnectAsync(
                 () => true,
                 () => true,
+                () => { },
                 () => { },
                 token =>
                 {
