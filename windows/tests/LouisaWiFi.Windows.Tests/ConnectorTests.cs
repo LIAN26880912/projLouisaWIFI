@@ -28,18 +28,18 @@ public class ConnectorTests
             return Task.FromResult(Result);
         }
 
-        public WifiProfileBackup? CaptureLouisaProfile() => new("<old />", 9);
+        public WifiProfileBackup? CaptureLouisaProfile(string ssid) => new("<old />", 9);
 
-        public Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
+        public Task<bool> ConnectAsync(string ssid, string password, string? bssid, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Tried.Add(password);
             if (Succeed && password == "correct")
-                Current = new WifiConnection("LouisaCoffee", bssid);
+                Current = new WifiConnection(ssid, bssid);
             return Task.FromResult(Succeed && password == "correct");
         }
 
-        public void RestoreLouisaProfile(WifiProfileBackup? original)
+        public void RestoreLouisaProfile(string ssid, WifiProfileBackup? original)
         {
             Restores++;
             Restored = original;
@@ -184,8 +184,8 @@ public class ConnectorTests
         public List<string> Tried { get; } = [];
         public Task<WifiScan> ScanAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new WifiScan([new WifiAccessPoint("AA:BB:CC:DD:EE:01", -50)]));
-        public WifiProfileBackup? CaptureLouisaProfile() => null;
-        public async Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
+        public WifiProfileBackup? CaptureLouisaProfile(string ssid) => null;
+        public async Task<bool> ConnectAsync(string ssid, string password, string? bssid, CancellationToken cancellationToken)
         {
             Tried.Add(password);
             if (password == "first")
@@ -196,6 +196,6 @@ public class ConnectorTests
             if (password == "second") Current = new WifiConnection("LouisaCoffee", bssid);
             return password == "second";
         }
-        public void RestoreLouisaProfile(WifiProfileBackup? original) { }
+        public void RestoreLouisaProfile(string ssid, WifiProfileBackup? original) { }
     }
 }

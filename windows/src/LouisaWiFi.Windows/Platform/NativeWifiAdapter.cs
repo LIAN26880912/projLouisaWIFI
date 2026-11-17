@@ -1,3 +1,4 @@
+using LouisaWiFi.Windows.Models;
 using ManagedNativeWifi;
 using System.Net.NetworkInformation;
 using Windows.Networking.Connectivity;
@@ -7,21 +8,28 @@ namespace LouisaWiFi.Windows.Platform;
 
 public sealed class NativeWifiAdapter : IWifi
 {
-    private const string LouisaSsid = "LouisaCoffee";
     private readonly AppCapability wifiCapability = AppCapability.Create("wiFiControl");
 
     public WifiConnection? Current
     {
         get
         {
-            var id = NativeWifi.EnumerateInterfaceConnections().FirstOrDefault(i => i.IsRadioOn)?.Id;
-            if (id is null) return null;
+            var radio = NativeWifi.EnumerateInterfaceConnections().FirstOrDefault(i => i.IsRadioOn);
+            if (radio is null) return null;
             if (CanReadBssid)
             {
-                var result = NativeWifi.GetCurrentConnection(id.Value);
+                var result = NativeWifi.GetCurrentConnection(radio.Id);
                 if (result.Item2 is { } connection && !string.IsNullOrEmpty(connection.Ssid.ToString()))
+                {
+                    // Windows reports the SSID while still authenticating (e.g. retrying an old store's
+                    // password); that must not stop us trying this store's. Other networks keep it, so we
+                    // don't hijack e.g. a hotspot mid-join.
+                    if (connection.InterfaceState != InterfaceState.Connected && LouisaNetwork.IsLouisa(connection.Ssid.ToString()))
+                        return null;
                     return new WifiConnection(connection.Ssid.ToString(), connection.Bssid.ToString());
+                }
             }
+            if (!radio.IsConnected) return null;
 
             var ssid = NetworkInformation.GetConnectionProfiles()
                 .Where(profile => profile.IsWlanConnectionProfile)
@@ -61,39 +69,40 @@ public sealed class NativeWifiAdapter : IWifi
             throw new InvalidOperationException("Windows 無法讀取 Wi-Fi 掃描結果。");
         }
         var points = networks
-            .Where(n => n.Ssid.ToString().Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase))
-            .Select(n => new WifiAccessPoint(n.Bssid.ToString(), n.Rssi))
+            .Where(n => LouisaNetwork.IsLouisa(n.Ssid.ToString()))
+            .Select(n => new WifiAccessPoint(n.Bssid.ToString(), n.Rssi, n.Ssid.ToString()))
             .OrderByDescending(n => n.Rssi)
             .ToList();
         return new WifiScan(points);
     }
 
-    public WifiProfileBackup? CaptureLouisaProfile()
+    public WifiProfileBackup? CaptureLouisaProfile(string ssid)
     {
         var id = InterfaceId();
         var profile = NativeWifi.EnumerateProfiles()
-            .FirstOrDefault(p => p.InterfaceInfo.Id == id && p.Name == LouisaSsid);
+            .FirstOrDefault(p => p.InterfaceInfo.Id == id && p.Name == ssid);
         return profile is null ? null : new WifiProfileBackup(profile.Document.Xml, profile.Position);
     }
 
-    public async Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
+    public async Task<bool> ConnectAsync(string ssid, string password, string? bssid, CancellationToken cancellationToken)
     {
+        if (!LouisaNetwork.IsLouisa(ssid)) throw new ArgumentException("不是路易莎的 Wi-Fi。", nameof(ssid));
         var id = InterfaceId();
-        var xml = ProfileXml.Build(LouisaSsid, password, autoConnect: false);
+        var xml = ProfileXml.Build(ssid, password, autoConnect: false);
         if (!NativeWifi.SetProfile(id, ProfileType.AllUser, xml, null, overwrite: true))
-            throw new InvalidOperationException("Windows 無法更新 LouisaCoffee 的 Wi-Fi 設定。");
+            throw new InvalidOperationException($"Windows 無法更新 {ssid} 的 Wi-Fi 設定。");
 
-        using (var watcher = AcmConnectionWatcher.Register(id, LouisaSsid))
+        using (var watcher = AcmConnectionWatcher.Register(id, ssid))
         {
             var target = bssid is null ? null : (NetworkIdentifier)PhysicalAddress.Parse(bssid);
-            if (!NativeWifi.ConnectNetwork(id, LouisaSsid, BssType.Infrastructure, target)) return false;
+            if (!NativeWifi.ConnectNetwork(id, ssid, BssType.Infrastructure, target)) return false;
             if (!await watcher.WaitAsync(TimeSpan.FromSeconds(35), cancellationToken)) return false;
         }
 
-        var autoXml = ProfileXml.Build(LouisaSsid, password, autoConnect: true);
+        var autoXml = ProfileXml.Build(ssid, password, autoConnect: true);
         var stable = await WaitForStableAutoConnectAsync(
-            () => Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true,
-            () => IsAutoConnectEnabled(id),
+            () => Current?.Ssid == ssid,
+            () => IsAutoConnectEnabled(id, ssid),
             () =>
             {
                 if (!NativeWifi.SetProfile(id, ProfileType.AllUser, autoXml, null, overwrite: true))
@@ -101,7 +110,7 @@ public sealed class NativeWifiAdapter : IWifi
             },
             token => Task.Delay(TimeSpan.FromSeconds(1), token),
             cancellationToken);
-        if (!stable && Current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
+        if (!stable && Current?.Ssid == ssid)
             throw new AutoConnectNotKeptException();
         return stable;
     }
@@ -143,23 +152,23 @@ public sealed class NativeWifiAdapter : IWifi
         return false;
     }
 
-    private static bool IsAutoConnectEnabled(Guid id) =>
-        NativeWifi.EnumerateProfiles().FirstOrDefault(p => p.InterfaceInfo.Id == id && p.Name == LouisaSsid)
+    private static bool IsAutoConnectEnabled(Guid id, string ssid) =>
+        NativeWifi.EnumerateProfiles().FirstOrDefault(p => p.InterfaceInfo.Id == id && p.Name == ssid)
             ?.Document.IsAutoConnectEnabled == true;
 
-    public void RestoreLouisaProfile(WifiProfileBackup? original)
+    public void RestoreLouisaProfile(string ssid, WifiProfileBackup? original)
     {
         var id = InterfaceId();
         if (original is null)
         {
-            if (!NativeWifi.DeleteProfile(id, LouisaSsid))
-                throw new InvalidOperationException("無法移除本次建立的 LouisaCoffee Wi-Fi 設定。");
+            if (!NativeWifi.DeleteProfile(id, ssid))
+                throw new InvalidOperationException($"無法移除本次建立的 {ssid} Wi-Fi 設定。");
             return;
         }
 
         if (!NativeWifi.SetProfile(id, ProfileType.AllUser, original.Xml, null, overwrite: true))
-            throw new InvalidOperationException("無法還原原本的 LouisaCoffee Wi-Fi 設定。");
-        if (!NativeWifi.SetProfilePosition(id, LouisaSsid, original.Position))
+            throw new InvalidOperationException($"無法還原原本的 {ssid} Wi-Fi 設定。");
+        if (!NativeWifi.SetProfilePosition(id, ssid, original.Position))
             throw new InvalidOperationException("已還原 Wi-Fi 設定，但無法還原原本的連線優先順序。");
     }
 

@@ -76,7 +76,6 @@ public static class ConnectionPlanner
 
 public sealed class Connector
 {
-    private const string LouisaSsid = "LouisaCoffee";
     private readonly IWifi wifi;
     private readonly ILearnedStore learned;
     private readonly ISecretStore secrets;
@@ -97,6 +96,8 @@ public sealed class Connector
     }
 
     public event Action<WifiResult>? StatusChanged;
+    /// Decision details for the log: store names and counts only, never passwords, BSSIDs or coordinates.
+    public event Action<string>? Trace;
 
     public async Task<WifiResult> ConnectAsync(Store store, string? password = null, CancellationToken cancellationToken = default)
     {
@@ -122,11 +123,11 @@ public sealed class Connector
     public IReadOnlySet<string> KnownStores() =>
         learned.All.Values.Select(entry => entry.StoreName).ToHashSet(StringComparer.Ordinal);
 
-    /// Learned store for the LouisaCoffee network we're on; "" when on LouisaCoffee but unknown; null otherwise.
+    /// Learned store for the Louisa network we're on; "" when on Louisa Wi-Fi but unknown; null otherwise.
     public string? CurrentStore()
     {
         var current = wifi.Current;
-        if (current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) != true) return null;
+        if (!LouisaNetwork.IsLouisa(current?.Ssid)) return null;
         return current.Bssid is not null && learned.All.TryGetValue(LearnedStore.Normalize(current.Bssid), out var entry)
             ? entry.StoreName
             : "";
@@ -186,7 +187,7 @@ public sealed class Connector
     {
         cancellationToken.ThrowIfCancellationRequested();
         var current = wifi.Current;
-        if (current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
+        if (LouisaNetwork.IsLouisa(current?.Ssid))
             return CurrentLouisa(current);
         if (wifi.HasInternet)
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
@@ -198,7 +199,7 @@ public sealed class Connector
             catch (UnauthorizedAccessException) { }
         }
         if (scan is { AccessPoints.Count: 0 })
-            return Report(WifiResult.Failed("附近找不到 LouisaCoffee Wi-Fi。"));
+            return Report(WifiResult.Failed("附近找不到路易莎 Wi-Fi。"));
 
         var candidates = ConnectionPlanner.Plan(store, scan ?? new WifiScan([]), learned.All, secrets, password)
             .Select(candidate => new StorePasswordCandidate(store, candidate));
@@ -235,7 +236,7 @@ public sealed class Connector
         if (manual) snoozed.Clear();
         else if (now < quietUntil) return null;
         var current = wifi.Current;
-        if (current?.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase) == true)
+        if (LouisaNetwork.IsLouisa(current?.Ssid))
             return CurrentLouisa(current);
         if (wifi.HasInternet)
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
@@ -251,12 +252,17 @@ public sealed class Connector
             return Report(WifiResult.Idle("Windows 未授權 Wi-Fi 定位資訊，請開啟定位設定或手動選店。"));
         }
         if (scan.AccessPoints.Count == 0)
-            return Report(WifiResult.Idle("附近找不到 LouisaCoffee Wi-Fi。"));
+            return Report(WifiResult.Idle("附近找不到路易莎 Wi-Fi。"));
+        Trace?.Invoke($"掃描到 {scan.AccessPoints.Count} 個路易莎基地台：{string.Join("、", scan.AccessPoints.Select(p => p.Ssid).Distinct())}");
 
         var key = LearnedStore.Normalize(scan.AccessPoints[0].Bssid);
         foreach (var expired in snoozed.Where(item => item.Value <= now).Select(item => item.Key).ToList())
             snoozed.Remove(expired);
-        if (snoozed.TryGetValue(key, out var until) && until > now) return null;
+        if (snoozed.TryGetValue(key, out var until) && until > now)
+        {
+            Trace?.Invoke("此基地台先前自動連線失敗，暫停嘗試中。");
+            return null;
+        }
 
         var attempt = new Attempt(scan, automatic: true);
         try
@@ -269,9 +275,11 @@ public sealed class Connector
             if (position.Fix is { } fix && fix.IsUsable(clock.GetUtcNow()))
             {
                 var nearby = ConnectionPlanner.Nearby(fix, stores);
+                Trace?.Invoke($"定位可用，5 公里內 {nearby.Select(c => c.Store.Name).Distinct().Count()} 家門市");
                 result = await TryCandidatesAsync(nearby, attempt, cancellationToken);
                 if (result is not null) return result;
             }
+            else Trace?.Invoke($"定位不可用：{position.UnavailableReason ?? (position.Fix is null ? "沒有定位" : "已過期或誤差超過 500 公尺")}");
 
             result = ExistingConnection(attempt);
             if (result is not null) return result;
@@ -304,7 +312,7 @@ public sealed class Connector
 
             if (!attempt.ProfileCaptured)
             {
-                attempt.OriginalProfile = wifi.CaptureLouisaProfile();
+                attempt.OriginalProfile = wifi.CaptureLouisaProfile(attempt.Ssid);
                 attempt.ProfileCaptured = true;
             }
             Report(WifiResult.Connecting(choice.Store.Name));
@@ -313,7 +321,7 @@ public sealed class Connector
             try
             {
                 connected = await wifi.ConnectAsync(
-                    choice.Candidate.Password, attempt.Scan?.AccessPoints[0].Bssid, cancellationToken);
+                    attempt.Ssid, choice.Candidate.Password, attempt.Scan?.AccessPoints[0].Bssid, cancellationToken);
             }
             catch (AutoConnectNotKeptException)
             {
@@ -324,6 +332,9 @@ public sealed class Connector
             {
                 quietUntil = clock.GetUtcNow().AddSeconds(15);
             }
+            Trace?.Invoke($"嘗試 {choice.Store.Name}（{attempt.Ssid}，" +
+                (choice.Candidate.PasswordIndex is { } index ? $"第 {index + 1} 組密碼" : "自訂密碼") +
+                $"）：{(connected ? "成功" : "失敗")}");
             if (!connected) continue;
 
             attempt.Connected = true;
@@ -333,7 +344,8 @@ public sealed class Connector
                     $"已連上{choice.Store.Name}，但未取得基地台資訊，無法記住門市。",
                     choice.Store.Name));
 
-            var bssids = attempt.Scan.AccessPoints.Where(p => p.Rssi > -75).Select(p => p.Bssid)
+            // Only the network we joined: a different Louisa SSID nearby may be another store.
+            var bssids = attempt.Scan.AccessPoints.Where(p => p.Ssid == attempt.Ssid && p.Rssi > -75).Select(p => p.Bssid)
                 .Append(wifi.Current?.Bssid ?? attempt.Scan.AccessPoints[0].Bssid)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -362,7 +374,7 @@ public sealed class Connector
     {
         if (wifi.Current is { } current)
         {
-            if (current.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase))
+            if (LouisaNetwork.IsLouisa(current.Ssid))
                 return ConnectedDuringAttempt(attempt, current);
             if (attempt.Automatic)
                 return Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
@@ -375,27 +387,29 @@ public sealed class Connector
         if (!attempt.ProfileCaptured) return CurrentLouisa(current);
         attempt.Connected = true;
         return Report(new WifiResult(WifiStatus.Connected,
-            "Windows 已連上 LouisaCoffee，請確認 Wi-Fi 自動連線設定。"));
+            $"Windows 已連上 {current.Ssid}，請確認 Wi-Fi 自動連線設定。"));
     }
 
     private void FinishAttempt(Attempt attempt)
     {
         if (!attempt.ProfileCaptured || attempt.Connected) return;
-        if (wifi.Current is { } current && current.Ssid.Equals(LouisaSsid, StringComparison.OrdinalIgnoreCase))
+        if (wifi.Current is { } current && LouisaNetwork.IsLouisa(current.Ssid))
             ConnectedDuringAttempt(attempt, current);
         else
-            wifi.RestoreLouisaProfile(attempt.OriginalProfile);
+            wifi.RestoreLouisaProfile(attempt.Ssid, attempt.OriginalProfile);
     }
 
     private WifiResult CurrentLouisa(WifiConnection current) =>
         current.Bssid is not null &&
         learned.All.TryGetValue(LearnedStore.Normalize(current.Bssid), out var existing)
             ? Report(WifiResult.Connected(existing.StoreName))
-            : Report(new WifiResult(WifiStatus.Connected, "已連上 LouisaCoffee，尚未辨識門市。"));
+            : Report(new WifiResult(WifiStatus.Connected, $"已連上 {current.Ssid}，尚未辨識門市。"));
 
     private sealed class Attempt(WifiScan? scan, bool automatic)
     {
         public WifiScan? Scan { get; } = scan;
+        /// The strongest Louisa SSID; every candidate password is tried on this one network.
+        public string Ssid { get; } = scan?.AccessPoints.FirstOrDefault()?.Ssid ?? LouisaNetwork.DefaultSsid;
         public bool Automatic { get; } = automatic;
         public HashSet<string> Tried { get; } = new(StringComparer.Ordinal);
         public WifiProfileBackup? OriginalProfile { get; set; }

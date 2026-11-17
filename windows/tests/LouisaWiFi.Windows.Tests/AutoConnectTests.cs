@@ -38,10 +38,12 @@ public class AutoConnectTests
         public WifiScan Scan { get; set; } = new([new WifiAccessPoint(Bssid, -50)]);
         public string? SuccessPassword { get; set; }
         public Func<string, CancellationToken, Task<bool>>? ConnectHandler { get; set; }
-        public List<(string Password, string? Bssid)> Tried { get; } = [];
+        public List<(string Password, string? Bssid, string Ssid)> Tried { get; } = [];
         public int Scans { get; private set; }
         public int Restores { get; private set; }
         public WifiProfileBackup? Restored { get; private set; }
+        public string? CapturedSsid { get; private set; }
+        public string? RestoredSsid { get; private set; }
 
         public Task<WifiScan> ScanAsync(CancellationToken cancellationToken)
         {
@@ -51,22 +53,27 @@ public class AutoConnectTests
             return Task.FromResult(Scan);
         }
 
-        public WifiProfileBackup? CaptureLouisaProfile() => new("<original />", 2);
+        public WifiProfileBackup? CaptureLouisaProfile(string ssid)
+        {
+            CapturedSsid = ssid;
+            return new("<original />", 2);
+        }
 
-        public async Task<bool> ConnectAsync(string password, string? bssid, CancellationToken cancellationToken)
+        public async Task<bool> ConnectAsync(string ssid, string password, string? bssid, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Tried.Add((password, bssid));
+            Tried.Add((password, bssid, ssid));
             var success = ConnectHandler is null
                 ? password == SuccessPassword
                 : await ConnectHandler(password, cancellationToken);
-            if (success) Current = new WifiConnection("LouisaCoffee", bssid);
+            if (success) Current = new WifiConnection(ssid, bssid);
             return success;
         }
 
-        public void RestoreLouisaProfile(WifiProfileBackup? original)
+        public void RestoreLouisaProfile(string ssid, WifiProfileBackup? original)
         {
             Restores++;
+            RestoredSsid = ssid;
             Restored = original;
         }
     }
@@ -164,6 +171,58 @@ public class AutoConnectTests
         Assert.All(wifi.Tried, item => Assert.Equal(Bssid, item.Bssid));
         Assert.Equal(1, wifi.Restores);
         Assert.Equal("<original />", wifi.Restored?.Xml);
+    }
+
+    [Theory]
+    [InlineData("LouisaCoffee", true)]
+    [InlineData("LouisaCoffee879", true)]
+    [InlineData("Louisa Coffee", true)]
+    [InlineData("louisacoffee", false)]
+    [InlineData("LouisaCoffee_Staff", false)]
+    [InlineData("LouisaCoffee879 ", false)]
+    [InlineData("LouisaCoffee\n", false)]
+    [InlineData("Louisa", false)]
+    [InlineData(null, false)]
+    public void LouisaNetworkAcceptsOnlyStoreSsids(string? ssid, bool expected) =>
+        Assert.Equal(expected, LouisaNetwork.IsLouisa(ssid));
+
+    [Fact]
+    public async Task SuffixedSsidIsJoinedAndLearnedWithoutOtherLouisaNetworks()
+    {
+        var store = StoreAt("新店", 25.001, "wrong", "right");
+        var wifi = new FakeWifi
+        {
+            SuccessPassword = "right",
+            Scan = new([
+                new WifiAccessPoint(Bssid, -50, "LouisaCoffee879"),
+                new WifiAccessPoint("AA:BB:CC:DD:EE:02", -55, "LouisaCoffee")
+            ])
+        };
+        var learned = new MemoryLearned();
+        var location = new FakeLocation { Result = new LocationResult(Fix(start), null) };
+        var connector = new Connector(wifi, learned, new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(location, [store]);
+
+        Assert.Equal(WifiStatus.Connected, result?.Status);
+        Assert.Equal("新店", result?.StoreName);
+        Assert.All(wifi.Tried, item => Assert.Equal("LouisaCoffee879", item.Ssid));
+        Assert.Equal("LouisaCoffee879", wifi.CapturedSsid);
+        Assert.Equal([LearnedStore.Normalize(Bssid)], learned.All.Keys);
+        Assert.Equal("新店", connector.CurrentStore());
+    }
+
+    [Fact]
+    public async Task FailedSuffixedSsidRestoresThatProfile()
+    {
+        var wifi = new FakeWifi { Scan = new([new WifiAccessPoint(Bssid, -50, "LouisaCoffee879")]) };
+        var location = new FakeLocation { Result = new LocationResult(Fix(start), null) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(location, [StoreAt("新店", 25.001, "wrong")]);
+
+        Assert.Equal(WifiStatus.Failed, result?.Status);
+        Assert.Equal("LouisaCoffee879", wifi.RestoredSsid);
     }
 
     [Fact]

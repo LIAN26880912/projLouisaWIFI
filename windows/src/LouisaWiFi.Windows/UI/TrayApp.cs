@@ -29,6 +29,7 @@ sealed class TrayApp : ApplicationContext
     private StatsForm? statsForm;
     private AppRelease? available;
     private WifiResult? lastStatus;
+    private string? lastTrace;
     private string? lastBalloon;
     private long lastBalloonAt;
     private bool automaticRunning;
@@ -60,13 +61,14 @@ sealed class TrayApp : ApplicationContext
 
         icon = new NotifyIcon { Icon = AppIcon.Load(), Text = "路易莎 Wi-Fi", ContextMenuStrip = menu, Visible = true };
         connector.StatusChanged += OnStatusChanged;
+        connector.Trace += OnTrace;
         location.Changed += OnLocationChanged;
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         timer = new System.Windows.Forms.Timer { Interval = 15_000, Enabled = true };
         timer.Tick += (_, _) => QueueAutomatic();
-        // Like macOS Tracker: a minute on LouisaCoffee per tick; timers don't run while asleep.
+        // Like macOS Tracker: a minute on Louisa Wi-Fi per tick; timers don't run while asleep.
         usageTimer = new System.Windows.Forms.Timer { Interval = 60_000, Enabled = true };
         usageTimer.Tick += (_, _) => RecordUsage();
         // Like macOS: check soon after start, then every 6 hours; dev builds only check from the menu.
@@ -480,10 +482,19 @@ sealed class TrayApp : ApplicationContext
     private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs args) => QueueAutomatic();
     private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs args)
     {
+        if (args.Mode is PowerModes.Suspend or PowerModes.Resume) AppLog.Write($"power: {args.Mode}");
         if (args.Mode == PowerModes.Resume) QueueAutomatic();
     }
 
     // MARK: - Status
+
+    /// The 15 s timer repeats the same decisions; log a line only when it differs from the last.
+    private void OnTrace(string message) => uiContext.Post(_ =>
+    {
+        if (message == lastTrace) return;
+        lastTrace = message;
+        AppLog.Write(message);
+    }, null);
 
     private void OnStatusChanged(WifiResult result)
     {
@@ -658,6 +669,7 @@ sealed class TrayApp : ApplicationContext
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         connector.StatusChanged -= OnStatusChanged;
+        connector.Trace -= OnTrace;
         disposed = true;
         icon.Visible = false;
         icon.Dispose();
