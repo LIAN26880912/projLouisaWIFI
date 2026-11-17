@@ -74,9 +74,9 @@ public class ConnectorTests
         new("測試門市", "台北市", "", 25, 121, passwords);
 
     [Fact]
-    public async Task ExistingInternetConnectionIsNeverSwitched()
+    public async Task InternetWithoutWifiIsNeverSwitched()
     {
-        var wifi = new FakeWifi { Current = new WifiConnection("HomeWiFi", "00:00:00:00:00:01"), HasInternet = true };
+        var wifi = new FakeWifi { HasInternet = true };
         var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets());
 
         var result = await connector.ConnectAsync(TestStore("candidate"));
@@ -84,6 +84,18 @@ public class ConnectorTests
         Assert.Equal(WifiStatus.Idle, result.Status);
         Assert.Equal(0, wifi.Scans);
         Assert.Empty(wifi.Tried);
+    }
+
+    [Fact]
+    public async Task ChosenStoreReplacesAnotherOnlineWifiLikeMacOS()
+    {
+        var wifi = new FakeWifi { Current = new WifiConnection("Hotspot", "00:00:00:00:00:01"), HasInternet = true, Succeed = true };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets());
+
+        var result = await connector.ConnectAsync(TestStore("wrong", "correct"));
+
+        Assert.Equal(WifiStatus.Connected, result.Status);
+        Assert.Equal(["wrong", "correct"], wifi.Tried);
     }
 
     [Fact]

@@ -189,7 +189,8 @@ public sealed class Connector
         var current = wifi.Current;
         if (LouisaNetwork.IsLouisa(current?.Ssid))
             return CurrentLouisa(current);
-        if (wifi.HasInternet)
+        // Like macOS: choosing a store leaves another Wi-Fi (e.g. a hotspot); only keep a non-Wi-Fi internet link.
+        if (current is null && wifi.HasInternet)
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
 
         WifiScan? scan = null;
@@ -253,7 +254,6 @@ public sealed class Connector
         }
         if (scan.AccessPoints.Count == 0)
             return Report(WifiResult.Idle("附近找不到路易莎 Wi-Fi。"));
-        Trace?.Invoke($"掃描到 {scan.AccessPoints.Count} 個路易莎基地台：{string.Join("、", scan.AccessPoints.Select(p => p.Ssid).Distinct())}");
 
         var key = LearnedStore.Normalize(scan.AccessPoints[0].Bssid);
         foreach (var expired in snoozed.Where(item => item.Value <= now).Select(item => item.Key).ToList())
@@ -263,6 +263,7 @@ public sealed class Connector
             Trace?.Invoke("此基地台先前自動連線失敗，暫停嘗試中。");
             return null;
         }
+        Trace?.Invoke($"掃描到 {scan.AccessPoints.Count} 個路易莎基地台：{string.Join("、", scan.AccessPoints.Select(p => p.Ssid).Distinct())}");
 
         var attempt = new Attempt(scan, automatic: true);
         try
@@ -378,6 +379,7 @@ public sealed class Connector
                 return ConnectedDuringAttempt(attempt, current);
             if (attempt.Automatic)
                 return Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
+            return null;
         }
         return wifi.HasInternet ? Report(WifiResult.Idle("目前已可上網，保留現有連線。")) : null;
     }
