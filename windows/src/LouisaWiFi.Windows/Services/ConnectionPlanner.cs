@@ -285,10 +285,12 @@ public sealed class Connector
             result = ExistingConnection(attempt);
             if (result is not null) return result;
             if (attempt.Tried.Count == 0)
-                return Report(WifiResult.Idle(position.UnavailableReason ??
-                    (position.Fix is null
-                        ? "附近沒有可辨識的門市，請手動選店。"
-                        : "定位已過期或誤差超過 500 公尺，請手動選店。")));
+                return Report(position.Fix is { } usable && usable.IsUsable(clock.GetUtcNow())
+                    ? WifiResult.Failed("5 公里內找不到路易莎門市，請手動選店。")
+                    : WifiResult.Idle(position.UnavailableReason ??
+                        (position.Fix is null
+                            ? "附近沒有可辨識的門市，請手動選店。"
+                            : "定位已過期或誤差超過 500 公尺，請手動選店。")));
 
             snoozed[key] = clock.GetUtcNow().AddMinutes(10);
             return Report(WifiResult.Failed("自動連線失敗，請手動選擇門市。"));

@@ -226,6 +226,20 @@ public class AutoConnectTests
     }
 
     [Fact]
+    public async Task NoStoreWithinRangeOfAUsableFixNotifies()
+    {
+        var wifi = new FakeWifi();
+        var location = new FakeLocation { Result = new LocationResult(Fix(start), null) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(location, [StoreAt("遠方", 26, "candidate")]);
+
+        Assert.Equal(WifiStatus.Failed, result?.Status);
+        Assert.Contains("5 公里內", result?.Message);
+        Assert.Empty(wifi.Tried);
+    }
+
+    [Fact]
     public async Task NoValidLocationDoesNotGuessOrSnoozeBeforeAnyPasswordAttempt()
     {
         var clock = new Clock();
