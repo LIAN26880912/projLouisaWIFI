@@ -42,6 +42,20 @@ public static class Stores
             .ToList();
     }
 
+    /// For an empty search box: the 5 nearest stores, then learned stores (nearest first, or by name without a fix).
+    public static IReadOnlyList<Store> Suggestions(double? lat, double? lng, IReadOnlySet<string> known, IEnumerable<Store>? stores = null)
+    {
+        var list = (stores ?? All).ToList();
+        var learned = list.Where(s => known.Contains(s.Name));
+        if (lat is not double la || lng is not double lo)
+            return learned.OrderBy(s => s.Name, StringComparer.Ordinal).ToList();
+        var nearby = Nearest(la, lo, 5, list).Select(x => x.Store).ToList();
+        return nearby.Concat(learned.Except(nearby)
+                .OrderBy(s => s.HasLocation ? Distance(la, lo, s.Lat, s.Lng) : double.MaxValue)
+                .ThenBy(s => s.Name, StringComparer.Ordinal))
+            .ToList();
+    }
+
     /// Exact name (with or without 門市) wins; otherwise every word must appear in name or address.
     public static IReadOnlyList<Store> Search(string keyword, IEnumerable<Store>? stores = null)
     {

@@ -38,6 +38,7 @@ sealed class TrayApp : ApplicationContext
     private bool locationReady;
     private bool closing;
     private bool disposed;
+    private bool retryOnClick;
 
     public TrayApp(Connector connector, IWifi wifi, LocationService location, SettingsStore settings,
         UsageTracker usage, LoginItem loginItem, Updater updater, SingleInstance? instance, string[] startupArgs)
@@ -60,6 +61,12 @@ sealed class TrayApp : ApplicationContext
         BuildMenu();
 
         icon = new NotifyIcon { Icon = AppIcon.Load(), Text = "路易莎 Wi-Fi", ContextMenuStrip = menu, Visible = true };
+        icon.BalloonTipClicked += (_, _) =>
+        {
+            if (!retryOnClick) return;
+            retryOnClick = false;
+            _ = ConnectNearestAsync();
+        };
         connector.StatusChanged += OnStatusChanged;
         connector.Trace += OnTrace;
         location.Changed += OnLocationChanged;
@@ -97,9 +104,7 @@ sealed class TrayApp : ApplicationContext
         status = Disabled(lastStatus?.Message ?? "就緒");
         items.Add(status);
 
-        IReadOnlySet<string> known;
-        try { known = connector.KnownStores(); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { known = new HashSet<string>(); }
+        var known = KnownStores();
         var onlyKnown = settings.OnlyKnown;
         var stores = onlyKnown ? Stores.All.Where(s => known.Contains(s.Name)).ToList() : Stores.All;
         var here = location.LastUsableFix;
@@ -227,7 +232,11 @@ sealed class TrayApp : ApplicationContext
     {
         if (!BeginDialog()) return;
         (Store? Store, string? Password) choice;
-        try { choice = StorePicker.Choose(); }
+        try
+        {
+            var here = location.LastUsableFix;
+            choice = StorePicker.Choose(Stores.Suggestions(here?.Latitude, here?.Longitude, KnownStores()));
+        }
         finally { manualRunning = false; }
         if (choice.Store is { } store) await ConnectAsync(store, choice.Password);
         else QueueAutomatic();
@@ -268,7 +277,7 @@ sealed class TrayApp : ApplicationContext
             if (!wifi.HasInternet) await EnsureLocationAccessAsync(userInitiated: true);
             if (closing) return;
             var result = await work(lifetime.Token);
-            if (!closing) Notify(result.Message);
+            if (!closing) NotifyResult(result);
         }
         catch (OperationCanceledException) { }
         catch (Exception error)
@@ -304,6 +313,11 @@ sealed class TrayApp : ApplicationContext
                 break;
             case CommandKind.Stats:
                 ShowStats();
+                break;
+            case CommandKind.Update:
+                // Like louisawifi://update: check first, install if one is already known.
+                if (available is null) await CheckForUpdatesAsync(manual: true);
+                else await InstallUpdateAsync();
                 break;
             case CommandKind.Updated:
                 Notify($"已更新到 {Updater.Display(updater.Current)}");
@@ -507,20 +521,31 @@ sealed class TrayApp : ApplicationContext
             icon.Text = result.Message.Length > 63 ? result.Message[..60] + "..." : result.Message;
             if (!changed) return;
             AppLog.Write(result.Message);
-            if (result.Status is WifiStatus.Connected or WifiStatus.Failed) Notify(result.Message);
+            if (result.Status is WifiStatus.Connected or WifiStatus.Failed) NotifyResult(result);
         }
 
         uiContext.Post(_ => Update(), null);
     }
 
+    private IReadOnlySet<string> KnownStores()
+    {
+        try { return connector.KnownStores(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return new HashSet<string>(); }
+    }
+
+    private void NotifyResult(WifiResult result) => Notify(
+        result.Snoozed ? $"{result.Message}\n已暫停自動連線 10 分鐘，點這則通知可立即重試。" : result.Message,
+        retryOnClick: result.Snoozed);
+
     /// Balloon (a toast on Windows 10/11); the same text within 10 s is shown once.
-    private void Notify(string message)
+    private void Notify(string message, bool retryOnClick = false)
     {
         if (disposed) return;
         var now = Environment.TickCount64;
         if (message == lastBalloon && now - lastBalloonAt < 10_000) return;
         lastBalloon = message;
         lastBalloonAt = now;
+        this.retryOnClick = retryOnClick;
         icon.ShowBalloonTip(3000, "路易莎 Wi-Fi", message, ToolTipIcon.None);
     }
 

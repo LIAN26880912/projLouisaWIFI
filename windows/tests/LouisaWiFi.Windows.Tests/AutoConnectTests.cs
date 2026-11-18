@@ -235,12 +235,13 @@ public class AutoConnectTests
         var result = await connector.AutoConnectAsync(location, [StoreAt("遠方", 26, "candidate")]);
 
         Assert.Equal(WifiStatus.Failed, result?.Status);
+        Assert.True(result?.Snoozed);
         Assert.Contains("5 公里內", result?.Message);
         Assert.Empty(wifi.Tried);
     }
 
     [Fact]
-    public async Task NoValidLocationDoesNotGuessOrSnoozeBeforeAnyPasswordAttempt()
+    public async Task NoValidLocationNotifiesAndSnoozesLikeMacUntilTheUserRetries()
     {
         var clock = new Clock();
         var store = StoreAt("附近", 25.001, "correct");
@@ -249,14 +250,18 @@ public class AutoConnectTests
         var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), clock);
 
         var first = await connector.AutoConnectAsync(location, [store]);
-        Assert.Equal(WifiStatus.Idle, first?.Status);
+        Assert.Equal(WifiStatus.Failed, first?.Status);
+        Assert.True(first?.Snoozed);
         Assert.Contains("過期", first?.Message);
         Assert.Empty(wifi.Tried);
         Assert.Equal(0, wifi.Restores);
 
         location.Result = new LocationResult(Fix(start), null);
-        var second = await connector.AutoConnectAsync(location, [store]);
-        Assert.Equal(WifiStatus.Connected, second?.Status);
+        clock.Now = start.AddMinutes(1);
+        Assert.Null(await connector.AutoConnectAsync(location, [store]));
+
+        var retried = await connector.ConnectNearestAsync(location, [store]);
+        Assert.Equal(WifiStatus.Connected, retried.Status);
         Assert.Equal(["correct"], wifi.Tried.Select(item => item.Password));
     }
 

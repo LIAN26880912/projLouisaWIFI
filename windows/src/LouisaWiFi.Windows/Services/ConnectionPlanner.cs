@@ -284,16 +284,16 @@ public sealed class Connector
 
             result = ExistingConnection(attempt);
             if (result is not null) return result;
+            // Like macOS runAuto: nothing to try also notifies and snoozes this base station.
             if (attempt.Tried.Count == 0)
-                return Report(position.Fix is { } usable && usable.IsUsable(clock.GetUtcNow())
-                    ? WifiResult.Failed("5 公里內找不到路易莎門市，請手動選店。")
-                    : WifiResult.Idle(position.UnavailableReason ??
-                        (position.Fix is null
-                            ? "附近沒有可辨識的門市，請手動選店。"
-                            : "定位已過期或誤差超過 500 公尺，請手動選店。")));
+                return Snooze(key, position.Fix is { } usable && usable.IsUsable(clock.GetUtcNow())
+                    ? "5 公里內找不到路易莎門市，請手動選店。"
+                    : position.UnavailableReason ??
+                      (position.Fix is null
+                          ? "無法辨識門市，請手動選店。"
+                          : "定位已過期或誤差超過 500 公尺，請手動選店。"));
 
-            snoozed[key] = clock.GetUtcNow().AddMinutes(10);
-            return Report(WifiResult.Failed("自動連線失敗，請手動選擇門市。"));
+            return Snooze(key, "自動連線失敗，請手動選擇門市。");
         }
         finally
         {
@@ -425,5 +425,11 @@ public sealed class Connector
     {
         StatusChanged?.Invoke(result);
         return result;
+    }
+
+    private WifiResult Snooze(string key, string message)
+    {
+        snoozed[key] = clock.GetUtcNow().AddMinutes(10);
+        return Report(WifiResult.Failed(message) with { Snoozed = true });
     }
 }

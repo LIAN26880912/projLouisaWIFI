@@ -12,6 +12,7 @@ public class SystemIntegrationTests
     [InlineData(new[] { "--nearest" }, CommandKind.Nearest, null)]
     [InlineData(new[] { "--SHOW" }, CommandKind.Show, null)]
     [InlineData(new[] { "--stats" }, CommandKind.Stats, null)]
+    [InlineData(new[] { "--update" }, CommandKind.Update, null)]
     [InlineData(new[] { "--connect", " 金城延和 " }, CommandKind.Connect, "金城延和")]
     public void CommandLineParsesKnownCommands(string[] args, CommandKind? kind, string? store)
     {
