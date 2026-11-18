@@ -7,6 +7,18 @@ namespace LouisaWiFi.Windows.Tests;
 
 public class SystemIntegrationTests
 {
+    [Fact]
+    public void LeftClickCanReuseNotifyIconsRightClickMenu() =>
+        Assert.NotNull(LouisaWiFi.Windows.UI.TrayApp.ShowContextMenu);
+
+    [Fact]
+    public void TrayIconStatesAreBuiltFromTheAppIcon()
+    {
+        var (connected, connecting, idle) = LouisaWiFi.Windows.UI.AppIcon.States();
+        using (connected) using (connecting) using (idle)
+            Assert.All(new[] { connected, connecting, idle }, i => Assert.Equal(System.Windows.Forms.SystemInformation.SmallIconSize, i.Size));
+    }
+
     [Theory]
     [InlineData(new string[0], null, null)]
     [InlineData(new[] { "--nearest" }, CommandKind.Nearest, null)]

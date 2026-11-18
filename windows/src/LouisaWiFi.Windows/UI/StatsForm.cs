@@ -17,8 +17,8 @@ sealed class StatsForm : Form
     private readonly RadioButton byYear = new() { Text = "年份", AutoSize = true };
     private readonly ListView list = new()
     {
-        View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false,
-        HeaderStyle = ColumnHeaderStyle.Nonclickable, Activation = ItemActivation.OneClick, Size = new Size(560, 200)
+        View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false, OwnerDraw = true,
+        HeaderStyle = ColumnHeaderStyle.Nonclickable, Activation = ItemActivation.OneClick, Size = new Size(840, 220)
     };
     private readonly ListBox ranges = new() { Width = 110, IntegralHeight = false, Dock = DockStyle.Fill };
     private int? year;
@@ -38,8 +38,20 @@ sealed class StatsForm : Form
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Padding = new Padding(12);
 
-        list.Columns.Add("名稱", 380);
-        list.Columns.Add("連線時間", 150);
+        list.Columns.Add("名稱", 220);
+        list.Columns.Add("", 470);
+        list.Columns.Add("連線時間", 130, HorizontalAlignment.Right);
+        list.DrawColumnHeader += (_, e) => e.DrawDefault = true;
+        list.DrawSubItem += (_, e) =>
+        {
+            if (e.ColumnIndex != 1 || e.SubItem?.Tag is not double ratio) { e.DrawDefault = true; return; }
+            e.DrawBackground();
+            if (e.Item!.Selected) e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
+            var height = Math.Max(4, e.Bounds.Height / 2);
+            var width = Math.Max(2, (int)((e.Bounds.Width - 8) * ratio));
+            using var bar = new SolidBrush(Color.FromArgb(0x2A, 0x78, 0xD6));
+            e.Graphics.FillRectangle(bar, e.Bounds.X + 4, e.Bounds.Y + (e.Bounds.Height - height) / 2, width, height);
+        };
 
         var title = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
         title.Controls.AddRange([heading, showAll]);
@@ -121,20 +133,24 @@ sealed class StatsForm : Form
             list.Items.Clear();
             if (byStore.Checked)
             {
+                var peak = stores.Count == 0 ? 0 : stores.Max(s => s.Seconds);
                 foreach (var (name, seconds) in stores)
-                    list.Items.Add(new ListViewItem([name, UsageStats.Duration(seconds)]) { Tag = name, Selected = name == store });
+                    list.Items.Add(Row(name, seconds, peak, name, name == store));
                 if (stores.Count == 0) list.Items.Add("這段期間沒有紀錄。連上路易莎 Wi-Fi 後會自動計時。");
             }
             else if (byMonth.Checked)
             {
-                foreach (var (label, seconds) in UsageStats.MonthTotals(period, perDay))
-                    list.Items.Add(new ListViewItem([label, UsageStats.Duration(seconds)]));
+                var months = UsageStats.MonthTotals(period, perDay);
+                var peak = months.Count == 0 ? 0 : months.Max(m => m.Seconds);
+                foreach (var (label, seconds) in months)
+                    list.Items.Add(Row(label, seconds, peak, null, false));
             }
             else
             {
                 var years = UsageStats.YearTotals(perDay);
+                var peak = years.Count == 0 ? 0 : years.Max(y2 => y2.Seconds);
                 foreach (var (y2, seconds) in years)
-                    list.Items.Add(new ListViewItem([$"{y2} 年", UsageStats.Duration(seconds)]) { Tag = y2, Selected = y2 == year });
+                    list.Items.Add(Row($"{y2} 年", seconds, peak, y2, y2 == year));
                 if (years.Count == 0) list.Items.Add("還沒有紀錄。");
             }
             list.EndUpdate();
@@ -155,6 +171,24 @@ sealed class StatsForm : Form
         }
     }
 
+    private static ListViewItem Row(string label, double seconds, double peak, object? tag, bool selected)
+    {
+        var item = new ListViewItem(label) { Tag = tag, Selected = selected };
+        item.SubItems.Add(new ListViewItem.ListViewSubItem(item, "") { Tag = peak > 0 ? seconds / peak : 0d });
+        item.SubItems.Add(UsageStats.Duration(seconds));
+        return item;
+    }
+
+    protected override bool ProcessDialogKey(Keys keyData)
+    {
+        if (keyData == Keys.Escape)
+        {
+            Close();
+            return true;
+        }
+        return base.ProcessDialogKey(keyData);
+    }
+
     private string Caption(IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> usage)
     {
         if (selected is not { } day) return "點選格子，查看當天的門市與連線時間";
@@ -166,10 +200,12 @@ sealed class StatsForm : Form
 
     private sealed class HeatmapPanel : Control
     {
-        private const int Cell = 10, Gap = 2, LabelWidth = 22, HeaderHeight = 16;
+        private const int Cell = 13, Gap = 3, LabelWidth = 22, HeaderHeight = 16, LegendHeight = 20;
         private static readonly Color[] palette =
             [Color.FromArgb(0xF0, 0xEF, 0xEC), Color.FromArgb(0xB7, 0xD3, 0xF6), Color.FromArgb(0x6D, 0xA7, 0xEC),
              Color.FromArgb(0x2A, 0x78, 0xD6), Color.FromArgb(0x10, 0x42, 0x81)];
+        // Like macOS: days shown outside the period are the empty colour at half opacity.
+        private static readonly Color outside = Color.FromArgb(0x80, palette[0]);
         private StatsPeriod? period;
         private IReadOnlyDictionary<string, double> perDay = new Dictionary<string, double>();
         private DateOnly? selected;
@@ -178,8 +214,13 @@ sealed class StatsForm : Form
         {
             DoubleBuffered = true;
             Cursor = Cursors.Hand;
-            Size = new Size(LabelWidth + 53 * (Cell + Gap), HeaderHeight + 7 * (Cell + Gap));
+            // The macOS empty colour is nearly the WinForms window grey, so draw on white like the macOS card.
+            BackColor = Color.White;
+            Size = SizeFor(53);
         }
+
+        private static Size SizeFor(int weeks) =>
+            new(LabelWidth + weeks * (Cell + Gap), HeaderHeight + 7 * (Cell + Gap) + LegendHeight);
 
         public event Action<DateOnly>? DayClicked;
 
@@ -188,7 +229,7 @@ sealed class StatsForm : Form
             this.period = period;
             this.perDay = perDay;
             this.selected = selected;
-            Size = new Size(LabelWidth + period.Weeks * (Cell + Gap), HeaderHeight + 7 * (Cell + Gap));
+            Size = SizeFor(period.Weeks);
             Invalidate();
         }
 
@@ -217,12 +258,27 @@ sealed class StatsForm : Form
                     var day = monday.AddDays(r);
                     if (!period.Shows(day)) continue;
                     var rect = new Rectangle(LabelWidth + w * (Cell + Gap), HeaderHeight + r * (Cell + Gap), Cell, Cell);
-                    var level = period.Contains(day) ? UsageStats.Level(perDay.GetValueOrDefault(UsageStats.Key(day))) : 0;
-                    using var fill = new SolidBrush(palette[level]);
+                    using var fill = new SolidBrush(period.Contains(day)
+                        ? palette[UsageStats.Level(perDay.GetValueOrDefault(UsageStats.Key(day)))]
+                        : outside);
                     g.FillRectangle(fill, rect);
                     if (day == selected) g.DrawRectangle(SystemPens.Highlight, rect.X - 1, rect.Y - 1, Cell + 1, Cell + 1);
                 }
             }
+
+            // 少 ▪▪▪▪▪ 多, right-aligned under the grid.
+            var y = HeaderHeight + 7 * (Cell + Gap) + 4;
+            var more = g.MeasureString("多", small);
+            var x = Width - (int)more.Width;
+            g.DrawString("多", small, text, x, y - 2);
+            for (var level = palette.Length - 1; level >= 0; level--)
+            {
+                x -= 11 + Gap;
+                using var fill = new SolidBrush(palette[level]);
+                g.FillRectangle(fill, x, y, 11, 11);
+            }
+            var less = g.MeasureString("少", small);
+            g.DrawString("少", small, text, x - less.Width - Gap, y - 2);
         }
 
         protected override void OnMouseClick(MouseEventArgs e)

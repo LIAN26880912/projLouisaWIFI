@@ -11,6 +11,10 @@ namespace LouisaWiFi.Windows.UI;
 sealed class TrayApp : ApplicationContext
 {
     private readonly NotifyIcon icon;
+    private readonly (Icon Connected, Icon Connecting, Icon Idle) icons = AppIcon.States();
+    // NotifyIcon's private right-click path (foreground window + taskbar-aware placement); public API has none.
+    internal static readonly System.Reflection.MethodInfo? ShowContextMenu =
+        typeof(NotifyIcon).GetMethod("ShowContextMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
     private readonly ContextMenuStrip menu;
     private readonly Connector connector;
     private readonly IWifi wifi;
@@ -60,7 +64,14 @@ sealed class TrayApp : ApplicationContext
         };
         BuildMenu();
 
-        icon = new NotifyIcon { Icon = AppIcon.Load(), Text = "路易莎 Wi-Fi", ContextMenuStrip = menu, Visible = true };
+        icon = new NotifyIcon { Icon = icons.Idle, Text = "路易莎 Wi-Fi", ContextMenuStrip = menu, Visible = true };
+        // Left click opens the same menu as right click, like the macOS menu bar.
+        icon.MouseClick += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Left) return;
+            if (ShowContextMenu is { } show) show.Invoke(icon, null);
+            else menu.Show(Cursor.Position);
+        };
         icon.BalloonTipClicked += (_, _) =>
         {
             if (!retryOnClick) return;
@@ -74,7 +85,7 @@ sealed class TrayApp : ApplicationContext
         NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         timer = new System.Windows.Forms.Timer { Interval = 15_000, Enabled = true };
-        timer.Tick += (_, _) => QueueAutomatic();
+        timer.Tick += (_, _) => { RefreshIcon(); QueueAutomatic(); };
         // Like macOS Tracker: a minute on Louisa Wi-Fi per tick; timers don't run while asleep.
         usageTimer = new System.Windows.Forms.Timer { Interval = 60_000, Enabled = true };
         usageTimer.Tick += (_, _) => RecordUsage();
@@ -492,8 +503,25 @@ sealed class TrayApp : ApplicationContext
         }, null);
     }
 
-    private void OnNetworkAddressChanged(object? sender, EventArgs args) => QueueAutomatic();
-    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs args) => QueueAutomatic();
+    private void OnNetworkAddressChanged(object? sender, EventArgs args) => OnNetworkChanged();
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs args) => OnNetworkChanged();
+
+    private void OnNetworkChanged()
+    {
+        uiContext.Post(_ => RefreshIcon(), null);
+        QueueAutomatic();
+    }
+
+    private void RefreshIcon()
+    {
+        if (disposed || closing) return;
+        var connecting = lastStatus?.Status == WifiStatus.Connecting && (automaticRunning || manualRunning);
+        WifiConnection? current = null;
+        try { current = wifi.Current; }
+        catch (Exception error) { AppLog.Write($"無法讀取目前 Wi-Fi：{error.Message}"); }
+        var next = connecting ? icons.Connecting : LouisaNetwork.IsLouisa(current?.Ssid) ? icons.Connected : icons.Idle;
+        if (icon.Icon != next) icon.Icon = next;
+    }
     private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs args)
     {
         if (args.Mode is PowerModes.Suspend or PowerModes.Resume) AppLog.Write($"power: {args.Mode}");
@@ -519,6 +547,7 @@ sealed class TrayApp : ApplicationContext
             lastStatus = result;
             if (status is not null && !status.IsDisposed) status.Text = Escape(result.Message);
             icon.Text = result.Message.Length > 63 ? result.Message[..60] + "..." : result.Message;
+            RefreshIcon();
             if (!changed) return;
             AppLog.Write(result.Message);
             if (result.Status is WifiStatus.Connected or WifiStatus.Failed) NotifyResult(result);
@@ -698,6 +727,9 @@ sealed class TrayApp : ApplicationContext
         disposed = true;
         icon.Visible = false;
         icon.Dispose();
+        icons.Connected.Dispose();
+        icons.Connecting.Dispose();
+        icons.Idle.Dispose();
         menu.Dispose();
         AppLog.Write("exited");
         base.ExitThreadCore();
@@ -710,5 +742,47 @@ static class AppIcon
     {
         using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("AppIcon.ico")!;
         return new Icon(stream, SystemInformation.SmallIconSize);
+    }
+
+    /// Tray states like macOS (filled cup / ellipsis / outline): colour, colour with a dot, grey.
+    public static (Icon Connected, Icon Connecting, Icon Idle) States()
+    {
+        using var source = Load();
+        using var colour = source.ToBitmap();
+        using var grey = new Bitmap(colour.Width, colour.Height);
+        using (var g = Graphics.FromImage(grey))
+        using (var attributes = new System.Drawing.Imaging.ImageAttributes())
+        {
+            float[][] luma = [[.3f, .3f, .3f, 0, 0], [.59f, .59f, .59f, 0, 0], [.11f, .11f, .11f, 0, 0], [0, 0, 0, .7f, 0], [0, 0, 0, 0, 1]];
+            attributes.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix(luma));
+            g.DrawImage(colour, new Rectangle(Point.Empty, colour.Size), 0, 0, colour.Width, colour.Height, GraphicsUnit.Pixel, attributes);
+        }
+        using var busy = new Bitmap(colour);
+        using (var g = Graphics.FromImage(busy))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var d = busy.Width / 2;
+            var dot = new Rectangle(busy.Width - d, busy.Height - d, d - 1, d - 1);
+            g.FillEllipse(Brushes.Orange, dot);
+            g.DrawEllipse(Pens.White, dot);
+        }
+        return (FromBitmap(colour), FromBitmap(busy), FromBitmap(grey));
+    }
+
+    // A PNG-in-ICO stream gives an Icon that owns its handle (Icon.FromHandle would leak it).
+    private static Icon FromBitmap(Bitmap bitmap)
+    {
+        using var png = new MemoryStream();
+        bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+        using var ico = new MemoryStream();
+        using (var w = new BinaryWriter(ico, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            w.Write((short)0); w.Write((short)1); w.Write((short)1);
+            w.Write((byte)bitmap.Width); w.Write((byte)bitmap.Height); w.Write((byte)0); w.Write((byte)0);
+            w.Write((short)1); w.Write((short)32); w.Write((int)png.Length); w.Write(22);
+            w.Write(png.ToArray());
+        }
+        ico.Position = 0;
+        return new Icon(ico);
     }
 }
