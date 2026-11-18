@@ -52,6 +52,8 @@ public sealed class Updater
     public async Task<AppRelease?> CheckAsync(CancellationToken cancellationToken)
     {
         using var response = await http.GetAsync(api, cancellationToken);
+        // GitHub answers 404 while the repo has no published release yet: nothing newer to offer.
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
         return Parse(await response.Content.ReadAsStringAsync(cancellationToken), RuntimeInformation.ProcessArchitecture);
     }

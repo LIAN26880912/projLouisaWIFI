@@ -150,9 +150,18 @@ public class UpdaterTests : IDisposable
         Assert.False(Updater.CanWrite(Path.Combine(dir, "missing")));
     }
 
-    private sealed class StaticHandler(byte[] body) : HttpMessageHandler
+    [Fact]
+    public async Task NoPublishedReleaseIsUpToDateButOtherErrorsThrow()
+    {
+        var none = new Updater(new HttpClient(new StaticHandler([], HttpStatusCode.NotFound)), new Uri("https://api.test/latest"));
+        Assert.Null(await none.CheckAsync(CancellationToken.None));
+        var limited = new Updater(new HttpClient(new StaticHandler([], HttpStatusCode.Forbidden)), new Uri("https://api.test/latest"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => limited.CheckAsync(CancellationToken.None));
+    }
+
+    private sealed class StaticHandler(byte[] body, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) });
+            Task.FromResult(new HttpResponseMessage(status) { Content = new ByteArrayContent(body) });
     }
 }
