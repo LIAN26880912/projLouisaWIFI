@@ -320,16 +320,10 @@ public sealed class Connector
             }
             Report(WifiResult.Connecting(choice.Store.Name));
             bool connected;
-            var manualOnly = false;
             try
             {
                 connected = await wifi.ConnectAsync(
                     attempt.Ssid, choice.Candidate.Password, attempt.Scan?.AccessPoints[0].Bssid, cancellationToken);
-            }
-            catch (AutoConnectNotKeptException)
-            {
-                // The password still worked, so learn the store; only Windows' own auto-join is off.
-                connected = manualOnly = true;
             }
             finally
             {
@@ -365,10 +359,7 @@ public sealed class Connector
                     $"已連上{choice.Store.Name}，但無法記住門市資訊：{error.Message}",
                     choice.Store.Name));
             }
-            return Report(manualOnly
-                ? new WifiResult(WifiStatus.Connected,
-                    $"已連上：{choice.Store.Name}（Windows 未保留自動連線設定）", choice.Store.Name)
-                : WifiResult.Connected(choice.Store.Name));
+            return Report(WifiResult.Connected(choice.Store.Name));
         }
         return null;
     }
@@ -390,8 +381,8 @@ public sealed class Connector
     {
         if (!attempt.ProfileCaptured) return CurrentLouisa(current);
         attempt.Connected = true;
-        return Report(new WifiResult(WifiStatus.Connected,
-            $"Windows 已連上 {current.Ssid}，請確認 Wi-Fi 自動連線設定。"));
+        // Windows joined by itself mid-attempt, so the store behind this link is unknown.
+        return Report(new WifiResult(WifiStatus.Connected, $"已連上 {current.Ssid}，尚未辨識門市。"));
     }
 
     private void FinishAttempt(Attempt attempt)

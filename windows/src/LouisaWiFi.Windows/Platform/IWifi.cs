@@ -8,10 +8,6 @@ public sealed record WifiConnection(string Ssid, string? Bssid);
 public sealed record WifiScan(IReadOnlyList<WifiAccessPoint> AccessPoints);
 public sealed record WifiProfileBackup(string Xml, int Position);
 
-/// The password worked and Wi-Fi is connected, but Windows kept the profile on manual connect.
-public sealed class AutoConnectNotKeptException()
-    : InvalidOperationException("Windows 未穩定保留 Wi-Fi 自動連線設定。");
-
 public interface IWifi
 {
     /// Null while Windows is still joining a Louisa network (it may be retrying an old password).
