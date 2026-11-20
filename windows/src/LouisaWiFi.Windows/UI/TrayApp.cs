@@ -59,6 +59,7 @@ sealed class TrayApp : ApplicationContext
         menu = new ContextMenuStrip();
         menu.Opening += (_, e) =>
         {
+            RefreshStatus();
             BuildMenu();
             e.Cancel = false;
         };
@@ -112,7 +113,17 @@ sealed class TrayApp : ApplicationContext
         menu.Items.Clear();
         var items = menu.Items;
 
-        status = Disabled(lastStatus?.Message ?? "就緒");
+        // Like macOS: an available update leads the menu in bold.
+        if (available is { } release)
+        {
+            var update = Item($"更新到 {Updater.Display(release.Version)}", InstallUpdateAsync);
+            update.Font = new Font(update.Font, FontStyle.Bold);
+            update.Disposed += (_, _) => update.Font.Dispose();
+            items.Add(update);
+            items.Add(new ToolStripSeparator());
+        }
+
+        status = Disabled(lastStatus?.Message ?? Connector.NotConnected);
         items.Add(status);
 
         var known = KnownStores();
@@ -166,8 +177,6 @@ sealed class TrayApp : ApplicationContext
         if (!loginItem.Supported) login.ToolTipText = "請直接執行 LouisaWiFi.exe 才能設定";
         items.Add(login);
         items.Add(new ToolStripSeparator());
-        if (available is { } release)
-            items.Add(Item($"更新到 {Updater.Display(release.Version)}", InstallUpdateAsync));
         items.Add(Item($"檢查更新（目前 {Updater.Display(updater.Current)}）", () => CheckForUpdatesAsync(manual: true)));
         items.Add(Item("結束", ExitAsync));
     }
@@ -341,6 +350,7 @@ sealed class TrayApp : ApplicationContext
                 CleanupUpdate();
                 break;
             default:
+                RefreshStatus();
                 Notify(lastStatus?.Message ?? "路易莎 Wi-Fi 正在背景執行，請從系統匣圖示操作。");
                 break;
         }
@@ -515,7 +525,7 @@ sealed class TrayApp : ApplicationContext
     private void RefreshIcon()
     {
         if (disposed || closing) return;
-        var connecting = lastStatus?.Status == WifiStatus.Connecting && (automaticRunning || manualRunning);
+        var connecting = Connecting;
         WifiConnection? current = null;
         try { current = wifi.Current; }
         catch (Exception error) { AppLog.Write($"無法讀取目前 Wi-Fi：{error.Message}"); }
@@ -544,16 +554,31 @@ sealed class TrayApp : ApplicationContext
         {
             if (disposed) return;
             var changed = lastStatus != result;
-            lastStatus = result;
-            if (status is not null && !status.IsDisposed) status.Text = Escape(result.Message);
-            icon.Text = result.Message.Length > 63 ? result.Message[..60] + "..." : result.Message;
-            RefreshIcon();
+            ShowStatus(result);
             if (!changed) return;
             AppLog.Write(result.Message);
             if (result.Status is WifiStatus.Connected or WifiStatus.Failed) NotifyResult(result);
         }
 
         uiContext.Post(_ => Update(), null);
+    }
+
+    private void ShowStatus(WifiResult result)
+    {
+        lastStatus = result;
+        if (status is not null && !status.IsDisposed) status.Text = Escape(result.Message);
+        icon.Text = result.Message.Length > 63 ? result.Message[..60] + "..." : result.Message;
+        RefreshIcon();
+    }
+
+    private bool Connecting => lastStatus?.Status == WifiStatus.Connecting && (automaticRunning || manualRunning);
+
+    /// Opening the menu re-reads the link (like macOS menuNeedsUpdate) without logging or notifying.
+    private void RefreshStatus()
+    {
+        if (disposed || closing || Connecting) return;
+        try { ShowStatus(connector.CurrentStatus(lastStatus)); }
+        catch (Exception error) { AppLog.Write($"無法讀取目前 Wi-Fi：{error.Message}"); }
     }
 
     private IReadOnlySet<string> KnownStores()

@@ -300,6 +300,27 @@ public class AutoConnectTests
     }
 
     [Fact]
+    public void CurrentStatusDropsStaleConnectionButKeepsFailures()
+    {
+        var wifi = new FakeWifi();
+        var learned = new MemoryLearned();
+        learned.Remember([Bssid], "新店", 0);
+        var connector = new Connector(wifi, learned, new MemorySecrets(), new Clock());
+        var reported = 0;
+        connector.StatusChanged += _ => reported++;
+
+        wifi.Current = new WifiConnection("LouisaCoffee", Bssid);
+        Assert.Equal(WifiResult.Connected("新店"), connector.CurrentStatus(WifiResult.Failed("失敗")));
+
+        wifi.Current = null;
+        Assert.Equal(WifiResult.Idle(Connector.NotConnected), connector.CurrentStatus(WifiResult.Connected("新店")));
+        Assert.Equal(WifiResult.Idle(Connector.NotConnected), connector.CurrentStatus(WifiResult.Connecting("新店")));
+        Assert.Equal(WifiResult.Idle(Connector.NotConnected), connector.CurrentStatus(null));
+        Assert.Equal(WifiResult.Failed("失敗"), connector.CurrentStatus(WifiResult.Failed("失敗")));
+        Assert.Equal(0, reported);
+    }
+
+    [Fact]
     public async Task FailedBssidIsSuppressedForTenMinutes()
     {
         var clock = new Clock();

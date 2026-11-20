@@ -133,6 +133,17 @@ public sealed class Connector
             : "";
     }
 
+    public const string NotConnected = "未連上路易莎 Wi-Fi。";
+
+    /// For the menu, like macOS currentStatus().orFailure(previous): the live Louisa link wins;
+    /// otherwise a failure or note stays, but a "connected"/"connecting" left from earlier does not.
+    public WifiResult CurrentStatus(WifiResult? previous)
+    {
+        var current = wifi.Current;
+        if (LouisaNetwork.IsLouisa(current?.Ssid)) return LouisaStatus(current);
+        return previous is { Status: WifiStatus.Failed or WifiStatus.Idle } ? previous : WifiResult.Idle(NotConnected);
+    }
+
     public void CancelAutomatic()
     {
         lock (gate)
@@ -394,11 +405,13 @@ public sealed class Connector
             wifi.RestoreLouisaProfile(attempt.Ssid, attempt.OriginalProfile);
     }
 
-    private WifiResult CurrentLouisa(WifiConnection current) =>
+    private WifiResult CurrentLouisa(WifiConnection current) => Report(LouisaStatus(current));
+
+    private WifiResult LouisaStatus(WifiConnection current) =>
         current.Bssid is not null &&
         learned.All.TryGetValue(LearnedStore.Normalize(current.Bssid), out var existing)
-            ? Report(WifiResult.Connected(existing.StoreName))
-            : Report(new WifiResult(WifiStatus.Connected, $"已連上 {current.Ssid}，尚未辨識門市。"));
+            ? WifiResult.Connected(existing.StoreName)
+            : new WifiResult(WifiStatus.Connected, $"已連上 {current.Ssid}，尚未辨識門市。");
 
     private sealed class Attempt(WifiScan? scan, bool automatic)
     {
