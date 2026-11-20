@@ -6,6 +6,10 @@ namespace LouisaWiFi.Windows.UI;
 sealed class StatsForm : Form
 {
     private const string PastYear = "過去一年";
+    /// macOS light palette: empty, then the four heat steps; [3] is also the bar colour.
+    private static readonly Color[] palette =
+        [Color.FromArgb(0xF0, 0xEF, 0xEC), Color.FromArgb(0xB7, 0xD3, 0xF6), Color.FromArgb(0x6D, 0xA7, 0xEC),
+         Color.FromArgb(0x2A, 0x78, 0xD6), Color.FromArgb(0x10, 0x42, 0x81)];
     private readonly UsageTracker tracker;
     private readonly Label heading = new() { AutoSize = true, Font = new Font(SystemFonts.MessageBoxFont!.FontFamily, 12, FontStyle.Bold) };
     private readonly Button showAll = new() { Text = "顯示全部門市", AutoSize = true, Visible = false };
@@ -20,6 +24,7 @@ sealed class StatsForm : Form
         View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false, OwnerDraw = true,
         HeaderStyle = ColumnHeaderStyle.Nonclickable, Activation = ItemActivation.OneClick, Size = new Size(840, 220)
     };
+    private readonly MonthChart months = new() { Size = new Size(840, 220), Visible = false };
     private readonly ListBox ranges = new() { Width = 110, IntegralHeight = false, Dock = DockStyle.Fill };
     private int? year;
     private string? store;
@@ -49,7 +54,7 @@ sealed class StatsForm : Form
             if (e.Item!.Selected) e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
             var height = Math.Max(4, e.Bounds.Height / 2);
             var width = Math.Max(2, (int)((e.Bounds.Width - 8) * ratio));
-            using var bar = new SolidBrush(Color.FromArgb(0x2A, 0x78, 0xD6));
+            using var bar = new SolidBrush(palette[3]);
             e.Graphics.FillRectangle(bar, e.Bounds.X + 4, e.Bounds.Y + (e.Bounds.Height - height) / 2, width, height);
         };
 
@@ -58,7 +63,7 @@ sealed class StatsForm : Form
         var modes = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(3, 12, 3, 3) };
         modes.Controls.AddRange([byStore, byMonth, byYear]);
         var left = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-        left.Controls.AddRange([title, tiles, grid, caption, modes, list]);
+        left.Controls.AddRange([title, tiles, grid, caption, modes, list, months]);
 
         var layout = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 1 };
         layout.Controls.Add(left, 0, 0);
@@ -77,7 +82,14 @@ sealed class StatsForm : Form
             selected = null;
             RefreshView();
         };
-        grid.DayClicked += day => { selected = day; RefreshView(); };
+        grid.DayClicked += day => { selected = selected == day ? null : day; RefreshView(); };
+        grid.DayMoved += days =>
+        {
+            selected = StatsPeriod.For(year, DateOnly.FromDateTime(DateTime.Now)).Step(selected, days);
+            RefreshView();
+        };
+        // Like macOS: the day grid has keyboard focus when the window opens.
+        Shown += (_, _) => grid.Focus();
         tracker.Changed += OnUsageChanged;
         RefreshView();
     }
@@ -131,6 +143,8 @@ sealed class StatsForm : Form
 
             list.BeginUpdate();
             list.Items.Clear();
+            list.Visible = !byMonth.Checked;
+            months.Visible = byMonth.Checked;
             if (byStore.Checked)
             {
                 var peak = stores.Count == 0 ? 0 : stores.Max(s => s.Seconds);
@@ -139,12 +153,7 @@ sealed class StatsForm : Form
                 if (stores.Count == 0) list.Items.Add("這段期間沒有紀錄。連上路易莎 Wi-Fi 後會自動計時。");
             }
             else if (byMonth.Checked)
-            {
-                var months = UsageStats.MonthTotals(period, perDay);
-                var peak = months.Count == 0 ? 0 : months.Max(m => m.Seconds);
-                foreach (var (label, seconds) in months)
-                    list.Items.Add(Row(label, seconds, peak, null, false));
-            }
+                months.Show(UsageStats.MonthTotals(period, perDay));
             else
             {
                 var years = UsageStats.YearTotals(perDay);
@@ -192,28 +201,28 @@ sealed class StatsForm : Form
     private string Caption(IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> usage)
     {
         if (selected is not { } day) return "點選格子，查看當天的門市與連線時間";
-        var weekday = "日一二三四五六"[(int)day.DayOfWeek];
         var stores = usage.GetValueOrDefault(UsageStats.Key(day))?.Where(s => s.Value > 0).OrderByDescending(s => s.Value).ToList() ?? [];
         var detail = stores.Count == 0 ? "無紀錄" : string.Join("・", stores.Select(s => $"{s.Key} {UsageStats.Duration(s.Value)}"));
-        return $"{day.Month}月{day.Day}日（星期{weekday}）　{detail}";
+        return $"{UsageStats.DayLabel(day)}　{detail}";
     }
 
     private sealed class HeatmapPanel : Control
     {
         private const int Cell = 13, Gap = 3, LabelWidth = 22, HeaderHeight = 16, LegendHeight = 20;
-        private static readonly Color[] palette =
-            [Color.FromArgb(0xF0, 0xEF, 0xEC), Color.FromArgb(0xB7, 0xD3, 0xF6), Color.FromArgb(0x6D, 0xA7, 0xEC),
-             Color.FromArgb(0x2A, 0x78, 0xD6), Color.FromArgb(0x10, 0x42, 0x81)];
         // Like macOS: days shown outside the period are the empty colour at half opacity.
         private static readonly Color outside = Color.FromArgb(0x80, palette[0]);
+        private readonly ToolTip tip = new();
         private StatsPeriod? period;
         private IReadOnlyDictionary<string, double> perDay = new Dictionary<string, double>();
         private DateOnly? selected;
+        private DateOnly? hovered;
 
         public HeatmapPanel()
         {
             DoubleBuffered = true;
             Cursor = Cursors.Hand;
+            SetStyle(ControlStyles.Selectable, true);
+            TabStop = true;
             // The macOS empty colour is nearly the WinForms window grey, so draw on white like the macOS card.
             BackColor = Color.White;
             Size = SizeFor(53);
@@ -223,6 +232,8 @@ sealed class StatsForm : Form
             new(LabelWidth + weeks * (Cell + Gap), HeaderHeight + 7 * (Cell + Gap) + LegendHeight);
 
         public event Action<DateOnly>? DayClicked;
+        /// Arrow keys: ±1 day (↑↓) or ±7 days (←→), like GitHub's graph.
+        public event Action<int>? DayMoved;
 
         public void Show(StatsPeriod period, IReadOnlyDictionary<string, double> perDay, DateOnly? selected)
         {
@@ -241,7 +252,7 @@ sealed class StatsForm : Form
             var g = e.Graphics;
             using var text = new SolidBrush(SystemColors.GrayText);
             using var small = new Font(Font.FontFamily, 7.5f);
-            string[] rows = ["一", "", "三", "", "五", "", ""];
+            string[] rows = ["一", "", "三", "", "五", "", "日"];
             for (var r = 0; r < 7; r++) g.DrawString(rows[r], small, text, 0, HeaderHeight + r * (Cell + Gap) - 2);
             var lastMonth = -1;
             for (var w = 0; w < period.Weeks; w++)
@@ -279,17 +290,138 @@ sealed class StatsForm : Form
             }
             var less = g.MeasureString("少", small);
             g.DrawString("少", small, text, x - less.Width - Gap, y - 2);
+            if (Focused) ControlPaint.DrawFocusRectangle(g, ClientRectangle);
+        }
+
+        /// The in-period day under the mouse; future days and the gaps around the grid are null.
+        private DateOnly? DayAt(Point p)
+        {
+            if (period is null || p.X < LabelWidth || p.Y < HeaderHeight) return null;
+            var week = (p.X - LabelWidth) / (Cell + Gap);
+            var row = (p.Y - HeaderHeight) / (Cell + Gap);
+            if (week >= period.Weeks || row >= 7) return null;
+            var day = DayAt(week, row);
+            return period.Contains(day) ? day : null;
         }
 
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
-            if (period is null || e.X < LabelWidth || e.Y < HeaderHeight) return;
-            var week = (e.X - LabelWidth) / (Cell + Gap);
-            var row = (e.Y - HeaderHeight) / (Cell + Gap);
-            if (week >= period.Weeks || row >= 7) return;
-            var day = DayAt(week, row);
-            if (period.Shows(day)) DayClicked?.Invoke(day);
+            Focus();
+            if (DayAt(e.Location) is { } day) DayClicked?.Invoke(day);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var day = DayAt(e.Location);
+            if (day == hovered) return;
+            hovered = day;
+            if (day is not { } d)
+            {
+                tip.Hide(this);
+                return;
+            }
+            var seconds = perDay.GetValueOrDefault(UsageStats.Key(d));
+            // Above the cell, like the macOS bubble.
+            var x = LabelWidth + (d.DayNumber - period!.GridStart.DayNumber) / 7 * (Cell + Gap);
+            var y = HeaderHeight + ((int)d.DayOfWeek + 6) % 7 * (Cell + Gap) - 24;
+            tip.Show($"{UsageStats.DayLabel(d)}{(seconds > 0 ? UsageStats.Duration(seconds) : "無紀錄")}", this, x, y);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            hovered = null;
+            tip.Hide(this);
+        }
+
+        protected override bool IsInputKey(Keys keyData) =>
+            keyData is Keys.Up or Keys.Down or Keys.Left or Keys.Right || base.IsInputKey(keyData);
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            int? days = e.KeyCode switch { Keys.Up => -1, Keys.Down => 1, Keys.Left => -7, Keys.Right => 7, _ => null };
+            if (days is not { } step) return;
+            e.Handled = true;
+            DayMoved?.Invoke(step);
+        }
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) tip.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    /// Twelve monthly columns like macOS: only the busiest month is labelled, hover for the rest.
+    private sealed class MonthChart : Control
+    {
+        private const int BarWidth = 28, MaxBar = 150;
+        private readonly ToolTip tip = new();
+        private IReadOnlyList<(string Label, double Seconds)> months = [];
+        private int hovered = -1;
+
+        public MonthChart()
+        {
+            DoubleBuffered = true;
+            BackColor = Color.White;
+        }
+
+        public void Show(IReadOnlyList<(string Label, double Seconds)> months)
+        {
+            this.months = months;
+            hovered = -1;
+            Invalidate();
+        }
+
+        private int ColumnWidth => Width / Math.Max(1, months.Count);
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            if (months.Count == 0) return;
+            var g = e.Graphics;
+            var peak = months.Max(m => m.Seconds);
+            var baseline = Height - Font.Height - 6;
+            using var text = new SolidBrush(SystemColors.GrayText);
+            using var bar = new SolidBrush(palette[3]);
+            using var empty = new SolidBrush(palette[0]);
+            using var center = new StringFormat { Alignment = StringAlignment.Center };
+            for (var i = 0; i < months.Count; i++)
+            {
+                var (label, seconds) = months[i];
+                var mid = i * ColumnWidth + ColumnWidth / 2;
+                var height = peak > 0 ? Math.Max(2, (int)(MaxBar * seconds / peak)) : 2;
+                g.FillRectangle(seconds > 0 ? bar : empty, mid - BarWidth / 2, baseline - height, BarWidth, height);
+                g.DrawString(label, Font, text, mid, baseline + 3, center);
+                if (peak > 0 && seconds == peak)
+                {
+                    var peakText = UsageStats.Duration(seconds);
+                    var half = g.MeasureString(peakText, Font).Width / 2;
+                    // Kept inside the chart, like the macOS heatmap tooltip.
+                    g.DrawString(peakText, Font, text, Math.Clamp(mid, half, Width - half), baseline - height - Font.Height - 3, center);
+                }
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var i = Math.Min(e.X / ColumnWidth, months.Count - 1);
+            if (i == hovered || i < 0) return;
+            hovered = i;
+            var (label, seconds) = months[i];
+            tip.SetToolTip(this, $"{label}：{(seconds > 0 ? UsageStats.Duration(seconds) : "無紀錄")}");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) tip.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

@@ -72,6 +72,17 @@ public class UsageTests
     }
 
     [Fact]
+    public void ArrowKeysStartAtTheLastDayAndStayInsideThePeriod()
+    {
+        var period = StatsPeriod.For(2026, new DateOnly(2026, 3, 1));
+        Assert.Equal(period.Last, period.Step(null, 7));
+        Assert.Equal(new DateOnly(2026, 2, 28), period.Step(period.Last, -1));
+        Assert.Equal(period.Last, period.Step(period.Last, 1));                  // never into the future
+        Assert.Equal(new DateOnly(2026, 1, 3), period.Step(new DateOnly(2026, 1, 3), -7)); // never before January
+        Assert.Equal("3月1日（星期日）", UsageStats.DayLabel(period.Last));
+    }
+
+    [Fact]
     public void TotalsStreakAndFormattingMatchTheMacApp()
     {
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> usage = new Dictionary<string, IReadOnlyDictionary<string, double>>

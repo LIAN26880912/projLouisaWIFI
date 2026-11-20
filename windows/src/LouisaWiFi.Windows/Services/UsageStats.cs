@@ -21,6 +21,10 @@ public sealed record StatsPeriod(DateOnly First, DateOnly End, DateOnly Last, Da
     public bool Contains(DateOnly day) => day >= First && day <= Last;
     public bool Shows(DateOnly day) => day >= First && day <= End;
 
+    /// Arrow keys like macOS: nothing selected starts at the last day; a move outside the period is ignored.
+    public DateOnly Step(DateOnly? selected, int days) =>
+        selected is not { } day ? Last : Contains(day.AddDays(days)) ? day.AddDays(days) : day;
+
     public IEnumerable<DateOnly> Days()
     {
         for (var d = First; d <= Last; d = d.AddDays(1)) yield return d;
@@ -87,6 +91,9 @@ public static class UsageStats
         < 7200 => 3,
         _ => 4
     };
+
+    /// "11月20日（星期五）", as in the macOS caption and tooltip.
+    public static string DayLabel(DateOnly day) => $"{day.Month}月{day.Day}日（星期{"日一二三四五六"[(int)day.DayOfWeek]}）";
 
     public static string Duration(double seconds)
     {
