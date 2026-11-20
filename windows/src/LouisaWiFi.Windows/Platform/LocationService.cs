@@ -9,7 +9,8 @@ public sealed record LocationFix(double Latitude, double Longitude, double Accur
     public bool IsUsable(DateTimeOffset now) =>
         double.IsFinite(Latitude) && Latitude is >= -90 and <= 90 &&
         double.IsFinite(Longitude) && Longitude is >= -180 and <= 180 &&
-        double.IsFinite(Accuracy) && Accuracy is >= 0 and <= 500 &&
+        // Exactly 500 m is Windows' coarse single-AP match; a phone hotspot's stale DB entry lands here, so reject it.
+        double.IsFinite(Accuracy) && Accuracy is >= 0 and < 500 &&
         Timestamp <= now && now - Timestamp <= TimeSpan.FromMinutes(5);
 }
 
@@ -118,7 +119,7 @@ public sealed class LocationService : ILocationProvider, IDisposable
             lock (gate) lastFix = fix;
             return fix.IsUsable(DateTimeOffset.UtcNow)
                 ? new LocationResult(fix, null)
-                : new LocationResult(null, "定位已過期或誤差超過 500 公尺，請手動選店。");
+                : new LocationResult(null, "定位已過期或誤差達 500 公尺以上，請手動選店。");
         }
         catch (UnauthorizedAccessException)
         {

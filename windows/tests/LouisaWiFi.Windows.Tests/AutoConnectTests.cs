@@ -104,11 +104,11 @@ public class AutoConnectTests
     [Fact]
     public void LocationFixEnforcesExactAgeAndAccuracyLimits()
     {
-        var fix = new LocationFix(25, 121, 500, start.AddMinutes(-5));
+        var fix = new LocationFix(25, 121, 499.999, start.AddMinutes(-5));
 
         Assert.True(fix.IsUsable(start));
         Assert.False((fix with { Timestamp = fix.Timestamp.AddTicks(-1) }).IsUsable(start));
-        Assert.False((fix with { Accuracy = 500.001 }).IsUsable(start));
+        Assert.False((fix with { Accuracy = 500 }).IsUsable(start));
         Assert.False((fix with { Accuracy = -1 }).IsUsable(start));
         Assert.False((fix with { Accuracy = double.NaN }).IsUsable(start));
         Assert.False((fix with { Latitude = 91 }).IsUsable(start));

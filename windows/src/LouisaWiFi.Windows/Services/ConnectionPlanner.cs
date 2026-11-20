@@ -280,7 +280,7 @@ public sealed class Connector
                 result = await TryCandidatesAsync(nearby, attempt, cancellationToken);
                 if (result is not null) return result;
             }
-            else Trace?.Invoke($"定位不可用：{position.UnavailableReason ?? (position.Fix is null ? "沒有定位" : "已過期或誤差超過 500 公尺")}");
+            else Trace?.Invoke($"定位不可用：{position.UnavailableReason ?? (position.Fix is null ? "沒有定位" : "已過期或誤差達 500 公尺以上")}");
 
             result = ExistingConnection(attempt);
             if (result is not null) return result;
@@ -291,7 +291,7 @@ public sealed class Connector
                     : position.UnavailableReason ??
                       (position.Fix is null
                           ? "無法辨識門市，請手動選店。"
-                          : "定位已過期或誤差超過 500 公尺，請手動選店。"));
+                          : "定位已過期或誤差達 500 公尺以上，請手動選店。"));
 
             return Snooze(key, "自動連線失敗，請手動選擇門市。");
         }
