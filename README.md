@@ -29,6 +29,10 @@ Louisa Wi-Fi 會認出你在哪一家店，自動換上那家店的密碼。全�
 - 🔄 **自動更新**：有新版本或新門市時，☕ 選單會提醒你，點一下就更新好。
 - 🔒 **資料只在你的 Mac 上**：不需要帳號，不會上傳任何資料。
 
+## Windows 版（開發中）
+
+想在 Windows 筆電上使用？請看 [windows/README.md](windows/README.md)。
+
 <p align="center"><img src="docs/screenshot-stats-month.png" width="700" alt="連線統計：每月時數"><br><sub>連線統計：點方格看當天去了哪家，下方可以切換門市、月份、年份。</sub></p>
 
 ## 安裝
