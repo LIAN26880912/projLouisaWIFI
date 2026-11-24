@@ -32,7 +32,14 @@ public sealed class NativeWifiAdapter : IWifi
                     return new WifiConnection(joiningSsid, connection.Bssid.ToString(), joining);
                 }
             }
-            if (!radio.IsConnected) return null;
+            if (!radio.IsConnected)
+            {
+                // While associating Windows reports no current connection at all, only the interface state.
+                var state = NativeWifi.EnumerateInterfaces().FirstOrDefault(i => i.Id == radio.Id)?.State;
+                return state is InterfaceState.Associating or InterfaceState.Discovering or InterfaceState.Authenticating
+                    ? new WifiConnection("", null, Joining: true)
+                    : null;
+            }
 
             var ssid = NetworkInformation.GetConnectionProfiles()
                 .Where(profile => profile.IsWlanConnectionProfile)

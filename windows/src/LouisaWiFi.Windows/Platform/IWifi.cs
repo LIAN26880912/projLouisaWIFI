@@ -5,7 +5,11 @@ namespace LouisaWiFi.Windows.Platform;
 /// Ssid is the Louisa network the access point broadcasts (see LouisaNetwork).
 public sealed record WifiAccessPoint(string Bssid, int Rssi, string Ssid = LouisaNetwork.DefaultSsid);
 /// Joining: Windows is still associating/authenticating to this (non-Louisa) network.
-public sealed record WifiConnection(string Ssid, string? Bssid, bool Joining = false);
+public sealed record WifiConnection(string Ssid, string? Bssid, bool Joining = false)
+{
+    /// Windows does not report the SSID while associating; it may even be a Louisa network.
+    public string Name => Ssid.Length == 0 ? "Wi-Fi 網路" : Ssid;
+}
 public sealed record WifiScan(IReadOnlyList<WifiAccessPoint> AccessPoints);
 public sealed record WifiProfileBackup(string Xml, int Position);
 

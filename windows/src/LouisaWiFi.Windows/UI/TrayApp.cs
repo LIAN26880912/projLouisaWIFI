@@ -43,6 +43,7 @@ sealed class TrayApp : ApplicationContext
     private bool closing;
     private bool disposed;
     private bool retryOnClick;
+    private bool replaceOnClick;
 
     public TrayApp(Connector connector, IWifi wifi, LocationService location, SettingsStore settings,
         UsageTracker usage, LoginItem loginItem, Updater updater, SingleInstance? instance, string[] startupArgs)
@@ -77,7 +78,7 @@ sealed class TrayApp : ApplicationContext
         {
             if (!retryOnClick) return;
             retryOnClick = false;
-            _ = ConnectNearestAsync();
+            _ = ConnectNearestAsync(replaceOnClick);
         };
         connector.StatusChanged += OnStatusChanged;
         connector.Trace += OnTrace;
@@ -248,8 +249,10 @@ sealed class TrayApp : ApplicationContext
     private Task ConnectAsync(Store store, string? password) =>
         RunManualAsync(token => connector.ConnectAsync(store, password, token));
 
-    private Task ConnectNearestAsync() =>
-        RunManualAsync(token => connector.ConnectNearestAsync(location, Stores.All, RecentStores(), token));
+    private Task ConnectNearestAsync() => ConnectNearestAsync(replaceOther: false);
+
+    private Task ConnectNearestAsync(bool replaceOther) =>
+        RunManualAsync(token => connector.ConnectNearestAsync(location, Stores.All, RecentStores(), replaceOther, token));
 
     /// With location off, the 3 most recently visited stores stand in for the nearby ones.
     private IReadOnlyList<Store>? RecentStores()
@@ -585,7 +588,7 @@ sealed class TrayApp : ApplicationContext
             AppLog.Write(result.Message);
             if (result.Status is WifiStatus.Connected or WifiStatus.Failed) NotifyResult(result);
             else if (result.JoiningOther is { } other)
-                Notify($"Windows 正在連線 {other}。\n點這則通知可中斷它，改連路易莎 Wi-Fi。", retryOnClick: true);
+                Notify($"Windows 正在連線 {other}。\n點這則通知可中斷它，改連路易莎 Wi-Fi。", retryOnClick: true, replaceOther: true);
         }
 
         uiContext.Post(_ => Update(), null);
@@ -629,7 +632,7 @@ sealed class TrayApp : ApplicationContext
         retryOnClick: result.Snoozed);
 
     /// Balloon (a toast on Windows 10/11); the same text within 10 s is shown once.
-    private void Notify(string message, bool retryOnClick = false)
+    private void Notify(string message, bool retryOnClick = false, bool replaceOther = false)
     {
         if (disposed || string.IsNullOrWhiteSpace(message)) return;
         var now = Environment.TickCount64;
@@ -637,6 +640,7 @@ sealed class TrayApp : ApplicationContext
         lastBalloon = message;
         lastBalloonAt = now;
         this.retryOnClick = retryOnClick;
+        replaceOnClick = replaceOther;
         icon.ShowBalloonTip(3000, "路易莎 Wi-Fi", message, ToolTipIcon.None);
     }
 

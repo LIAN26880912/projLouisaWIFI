@@ -592,18 +592,25 @@ public class AutoConnectTests
     }
 
     [Fact]
-    public async Task AutomaticReportsAnotherNetworkJoiningWithoutInterruptingIt()
+    public async Task AutomaticReportsAnotherNetworkJoiningOnlyOnceItLooksStuck()
     {
-        var wifi = new FakeWifi { Current = new WifiConnection("手機熱點", null, Joining: true) };
-        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+        var wifi = new FakeWifi { Current = new WifiConnection("", null, Joining: true) };
+        var clock = new Clock();
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), clock);
+        Task<WifiResult?> Check() => connector.AutoConnectAsync(new FakeLocation(), [StoreAt("店", 25, "pw")]);
 
-        var result = await connector.AutoConnectAsync(new FakeLocation(), [StoreAt("店", 25, "pw")]);
-
-        Assert.Equal("手機熱點", result?.JoiningOther);
+        Assert.Null((await Check())?.JoiningOther);
+        clock.Now = start.AddSeconds(10);
+        Assert.Equal("Wi-Fi 網路", (await Check())?.JoiningOther);
         Assert.Equal(0, wifi.Disconnects);
         Assert.Equal(0, wifi.Scans);
-        // Not snoozed: the next check still reports it.
-        Assert.Equal("手機熱點", (await connector.AutoConnectAsync(new FakeLocation(), [StoreAt("店", 25, "pw")]))?.JoiningOther);
+
+        // A new join after it finished starts the wait again.
+        wifi.Current = null;
+        await Check();
+        wifi.Current = new WifiConnection("手機熱點", null, Joining: true);
+        clock.Now = start.AddSeconds(20);
+        Assert.Null((await Check())?.JoiningOther);
     }
 
     [Fact]
@@ -618,6 +625,18 @@ public class AutoConnectTests
 
         Assert.Equal(WifiStatus.Connected, result.Status);
         Assert.Equal(1, wifi.Disconnects);
+    }
+
+    [Fact]
+    public async Task ClickingTheJoiningNotificationReplacesTheNetworkWindowsJustJoined()
+    {
+        var store = StoreAt("店", 25.001, "pw");
+        var wifi = new FakeWifi { Current = new WifiConnection("手機熱點", null), HasInternet = true, SuccessPassword = "pw" };
+        var location = new FakeLocation { Result = new(Fix(start), null) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        Assert.Equal(WifiStatus.Idle, (await connector.ConnectNearestAsync(location, [store])).Status);
+        Assert.Equal(WifiStatus.Connected, (await connector.ConnectNearestAsync(location, [store], replaceOther: true)).Status);
     }
 
     [Fact]

@@ -89,6 +89,7 @@ public sealed class Connector
     private CancellationTokenSource? active;
     private bool activeAutomatic;
     private DateTimeOffset quietUntil = DateTimeOffset.MinValue;
+    private DateTimeOffset? joiningSince;
 
     public Connector(IWifi wifi, ILearnedStore learned, ISecretStore secrets, TimeProvider? clock = null)
     {
@@ -117,13 +118,15 @@ public sealed class Connector
         RunAsync(true, token => AutoConnectCoreAsync(location, stores, recent, manual: false, token), cancellationToken);
 
     /// Menu/CLI "nearest store": same search as auto-connect, but a user action, so it ignores snoozes and the switch,
-    /// and interrupts another network Windows is still joining.
+    /// and interrupts another network Windows is still joining. replaceOther (the user clicked the "joining"
+    /// notification) also leaves a Wi-Fi network Windows finished joining meanwhile.
     public async Task<WifiResult> ConnectNearestAsync(
         ILocationProvider location,
         IReadOnlyList<Store> stores,
         IReadOnlyList<Store>? recent = null,
+        bool replaceOther = false,
         CancellationToken cancellationToken = default) =>
-        await RunAsync(false, token => AutoConnectCoreAsync(location, stores, recent, manual: true, token), cancellationToken)
+        await RunAsync(false, token => AutoConnectCoreAsync(location, stores, recent, manual: true, token, replaceOther), cancellationToken)
             ?? throw new InvalidOperationException("手動連線未執行。");
 
     /// Store names that have worked here before (learned base stations).
@@ -251,24 +254,29 @@ public sealed class Connector
         IReadOnlyList<Store> stores,
         IReadOnlyList<Store>? recent,
         bool manual,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool replaceOther = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var now = clock.GetUtcNow();
         if (manual) snoozed.Clear();
         else if (now < quietUntil) return null;
         var current = wifi.Current;
+        if (current is not { Joining: true }) joiningSince = null;
         if (LouisaNetwork.IsLouisa(current?.Ssid))
             return CurrentLouisa(current);
-        if (wifi.HasInternet)
+        var leaveOther = manual && replaceOther;
+        if (wifi.HasInternet && !(leaveOther && current is not null))
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
         if (current is { Joining: true })
         {
             // Never interrupt on our own: the user may be joining a hotspot on purpose.
-            if (!manual) return Report(WifiResult.Joining(current.Ssid));
+            if (!manual) return JoiningResult(current);
             StopJoining(current);
+            // Windows may rejoin it on its own while we scan; the user asked for Louisa instead.
+            leaveOther = true;
         }
-        else if (current is not null)
+        else if (current is not null && !leaveOther)
             return Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
         if (!wifi.CanReadBssid)
             return Report(WifiResult.Idle("Windows 未授權 Wi-Fi 定位資訊，請開啟定位設定或手動選店。"));
@@ -292,7 +300,7 @@ public sealed class Connector
         }
         Trace?.Invoke($"掃描到 {scan.AccessPoints.Count} 個路易莎基地台：{string.Join("、", scan.AccessPoints.Select(p => p.Ssid).Distinct())}");
 
-        var attempt = new Attempt(scan, automatic: true);
+        var attempt = new Attempt(scan, automatic: !leaveOther);
         try
         {
             var known = ConnectionPlanner.Learned(scan, stores, learned.All, secrets);
@@ -408,9 +416,17 @@ public sealed class Connector
         return null;
     }
 
+    private WifiResult JoiningResult(WifiConnection joining)
+    {
+        var now = clock.GetUtcNow();
+        joiningSince ??= now;
+        // A normal join takes a few seconds; checks run on network changes and every 15 s.
+        return Report(WifiResult.Joining(joining.Name, stuck: now - joiningSince >= TimeSpan.FromSeconds(10)));
+    }
+
     private void StopJoining(WifiConnection joining)
     {
-        Trace?.Invoke($"中斷 Windows 正在連線的 {joining.Ssid}，改連路易莎 Wi-Fi。");
+        Trace?.Invoke($"中斷 Windows 正在連線的 {joining.Name}，改連路易莎 Wi-Fi。");
         wifi.Disconnect();
     }
 
@@ -421,7 +437,7 @@ public sealed class Connector
             if (LouisaNetwork.IsLouisa(current.Ssid))
                 return ConnectedDuringAttempt(attempt, current);
             if (attempt.Automatic)
-                return Report(current.Joining ? WifiResult.Joining(current.Ssid) : WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
+                return current.Joining ? JoiningResult(current) : Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
             return null;
         }
         return wifi.HasInternet ? Report(WifiResult.Idle("目前已可上網，保留現有連線。")) : null;
