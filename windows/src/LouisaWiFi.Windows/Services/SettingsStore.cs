@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace LouisaWiFi.Windows.Services;
 
-public sealed record AppSettings(bool AutoConnect = true, bool OnlyKnown = false);
+/// UseLocation off (default): auto-connect skips Windows location and tries recently visited stores instead.
+public sealed record AppSettings(bool AutoConnect = true, bool OnlyKnown = false, bool UseLocation = false);
 
 public sealed class SettingsStore
 {
@@ -18,9 +19,11 @@ public sealed class SettingsStore
 
     public bool AutoConnect => settings.AutoConnect;
     public bool OnlyKnown => settings.OnlyKnown;
+    public bool UseLocation => settings.UseLocation;
 
     public void SetAutoConnect(bool enabled) => Save(settings with { AutoConnect = enabled });
     public void SetOnlyKnown(bool enabled) => Save(settings with { OnlyKnown = enabled });
+    public void SetUseLocation(bool enabled) => Save(settings with { UseLocation = enabled });
 
     private void Save(AppSettings next)
     {

@@ -76,6 +76,13 @@ public class AutoConnectTests
             RestoredSsid = ssid;
             Restored = original;
         }
+
+        public int Disconnects { get; private set; }
+        public void Disconnect()
+        {
+            Disconnects++;
+            Current = null;
+        }
     }
 
     private sealed class MemoryLearned : ILearnedStore
@@ -582,5 +589,52 @@ public class AutoConnectTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
         Assert.Equal(1, wifi.Scans);
         Assert.Equal(1, wifi.Restores);
+    }
+
+    [Fact]
+    public async Task AutomaticReportsAnotherNetworkJoiningWithoutInterruptingIt()
+    {
+        var wifi = new FakeWifi { Current = new WifiConnection("手機熱點", null, Joining: true) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(new FakeLocation(), [StoreAt("店", 25, "pw")]);
+
+        Assert.Equal("手機熱點", result?.JoiningOther);
+        Assert.Equal(0, wifi.Disconnects);
+        Assert.Equal(0, wifi.Scans);
+        // Not snoozed: the next check still reports it.
+        Assert.Equal("手機熱點", (await connector.AutoConnectAsync(new FakeLocation(), [StoreAt("店", 25, "pw")]))?.JoiningOther);
+    }
+
+    [Fact]
+    public async Task ManualNearestStopsAnotherNetworkJoiningThenConnects()
+    {
+        var store = StoreAt("店", 25.001, "pw");
+        var wifi = new FakeWifi { Current = new WifiConnection("手機熱點", null, Joining: true), SuccessPassword = "pw" };
+        var location = new FakeLocation { Result = new(Fix(start), null) };
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        var result = await connector.ConnectNearestAsync(location, [store]);
+
+        Assert.Equal(WifiStatus.Connected, result.Status);
+        Assert.Equal(1, wifi.Disconnects);
+    }
+
+    [Fact]
+    public async Task WithoutLocationAutomaticTriesRecentStoresThenSnoozes()
+    {
+        var recent = new[] { StoreAt("最近", 22, "r0", "r1"), StoreAt("上次", 23, "s0") };
+        var wifi = new FakeWifi();
+        var connector = new Connector(wifi, new MemoryLearned(), new MemorySecrets(), new Clock());
+
+        var result = await connector.AutoConnectAsync(null, recent, recent);
+
+        Assert.Equal(["r0", "s0", "r1"], wifi.Tried.Select(item => item.Password));
+        Assert.Equal(WifiStatus.Failed, result?.Status);
+        Assert.Null(await connector.AutoConnectAsync(null, recent, recent));
+
+        var empty = await new Connector(new FakeWifi(), new MemoryLearned(), new MemorySecrets(), new Clock())
+            .AutoConnectAsync(null, recent);
+        Assert.Equal("還沒有最近去過的門市，請手動選店。", empty?.Message);
     }
 }

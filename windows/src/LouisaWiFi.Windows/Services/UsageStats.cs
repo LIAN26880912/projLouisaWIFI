@@ -43,6 +43,17 @@ public static class UsageStats
         usage.ToDictionary(day => day.Key,
             day => store is null ? day.Value.Values.Sum() : day.Value.GetValueOrDefault(store));
 
+    /// Stores by last visit (latest first), then by total time; 未知門市 is skipped.
+    public static IReadOnlyList<string> StoresByRecency(Usage usage) =>
+        usage.Where(day => DateOnly.TryParseExact(day.Key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            .SelectMany(day => day.Value.Where(store => store.Value > 0).Select(store => (Day: day.Key, Name: store.Key, Seconds: store.Value)))
+            .Where(visit => visit.Name != UsageTracker.UnknownStore)
+            .GroupBy(visit => visit.Name)
+            .OrderByDescending(visits => visits.Max(visit => visit.Day), StringComparer.Ordinal)
+            .ThenByDescending(visits => visits.Sum(visit => visit.Seconds))
+            .Select(visits => visits.Key)
+            .ToList();
+
     public static IReadOnlyList<(string Name, double Seconds)> StoreTotals(Usage usage, StatsPeriod period)
     {
         var totals = new Dictionary<string, double>();

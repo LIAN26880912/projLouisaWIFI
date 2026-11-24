@@ -141,6 +141,11 @@ public sealed class LocationService : ILocationProvider, IDisposable
         {
             return new LocationResult(null, "目前無法取得定位，請使用已記住的基地台或手動選店。");
         }
+        // Other WinRT failures (some with an empty message) must not abort auto-connect.
+        catch (COMException error)
+        {
+            return new LocationResult(null, $"目前無法取得定位（0x{error.HResult:X8}），請使用已記住的基地台或手動選店。");
+        }
     }
 
     private void OnPositionChanged(Geolocator sender, PositionChangedEventArgs args)

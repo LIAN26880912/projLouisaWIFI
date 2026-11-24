@@ -171,6 +171,9 @@ sealed class TrayApp : ApplicationContext
 
         items.Add(Item("定位權限設定…", ManagePermissionAsync));
         items.Add(Toggle("自動連線", settings.AutoConnect, ToggleAutoConnect));
+        var useLocation = Toggle("用定位找新門市", settings.UseLocation, ToggleUseLocation);
+        useLocation.ToolTipText = "關閉時，自動連線改試最近去過的 3 家門市；「連線到最近的門市」仍會使用定位";
+        items.Add(useLocation);
         items.Add(Toggle("只顯示連過的門市", onlyKnown, ToggleOnlyKnown));
         var login = Toggle("登入時開啟", SafeLoginEnabled(), ToggleLogin);
         login.Enabled = loginItem.Supported;
@@ -246,7 +249,15 @@ sealed class TrayApp : ApplicationContext
         RunManualAsync(token => connector.ConnectAsync(store, password, token));
 
     private Task ConnectNearestAsync() =>
-        RunManualAsync(token => connector.ConnectNearestAsync(location, Stores.All, token));
+        RunManualAsync(token => connector.ConnectNearestAsync(location, Stores.All, RecentStores(), token));
+
+    /// With location off, the 3 most recently visited stores stand in for the nearby ones.
+    private IReadOnlyList<Store>? RecentStores()
+    {
+        if (settings.UseLocation) return null;
+        return UsageStats.StoresByRecency(usage.Snapshot())
+            .Select(name => Stores.Named(name)).OfType<Store>().Take(3).ToList();
+    }
 
     private async Task ChooseStoreAsync()
     {
@@ -302,7 +313,7 @@ sealed class TrayApp : ApplicationContext
         catch (OperationCanceledException) { }
         catch (Exception error)
         {
-            OnStatusChanged(WifiResult.Failed(error.Message));
+            OnStatusChanged(Failure(error));
         }
         finally
         {
@@ -402,6 +413,21 @@ sealed class TrayApp : ApplicationContext
         }
     }
 
+    private void ToggleUseLocation()
+    {
+        if (closing) return;
+        try
+        {
+            settings.SetUseLocation(!settings.UseLocation);
+            location.SetWatching(locationReady && settings.AutoConnect && settings.UseLocation);
+            QueueAutomatic();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Notify($"無法更新設定：{error.Message}");
+        }
+    }
+
     private void ToggleOnlyKnown()
     {
         try { settings.SetOnlyKnown(!settings.OnlyKnown); }
@@ -434,7 +460,7 @@ sealed class TrayApp : ApplicationContext
     {
         if (!BeginDialog()) return;
         try { await EnsureLocationAccessAsync(userInitiated: true, showSettings: true); }
-        catch (Exception error) { OnStatusChanged(WifiResult.Failed(error.Message)); }
+        catch (Exception error) { OnStatusChanged(Failure(error)); }
         finally
         {
             manualRunning = false;
@@ -466,7 +492,7 @@ sealed class TrayApp : ApplicationContext
             }
             locationReady = true;
         }
-        location.SetWatching(settings.AutoConnect);
+        location.SetWatching(settings.AutoConnect && settings.UseLocation);
     }
 
     // MARK: - Auto-connect
@@ -485,12 +511,12 @@ sealed class TrayApp : ApplicationContext
         {
             await EnsureLocationAccessAsync(userInitiated: false);
             if (!closing && !manualRunning && settings.AutoConnect)
-                await connector.AutoConnectAsync(location, Stores.All, lifetime.Token);
+                await connector.AutoConnectAsync(settings.UseLocation ? location : null, Stores.All, RecentStores(), lifetime.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception error)
         {
-            OnStatusChanged(WifiResult.Failed(error.Message));
+            OnStatusChanged(Failure(error));
         }
         finally
         {
@@ -558,6 +584,8 @@ sealed class TrayApp : ApplicationContext
             if (!changed) return;
             AppLog.Write(result.Message);
             if (result.Status is WifiStatus.Connected or WifiStatus.Failed) NotifyResult(result);
+            else if (result.JoiningOther is { } other)
+                Notify($"Windows 正在連線 {other}。\n點這則通知可中斷它，改連路易莎 Wi-Fi。", retryOnClick: true);
         }
 
         uiContext.Post(_ => Update(), null);
@@ -587,6 +615,15 @@ sealed class TrayApp : ApplicationContext
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return new HashSet<string>(); }
     }
 
+    /// Some WinRT/COM errors have no message: log the type so the cause can be traced, and never show a blank toast.
+    private static WifiResult Failure(Exception error)
+    {
+        AppLog.Write($"錯誤類型：{error.GetType().FullName}（0x{error.HResult:X8}）");
+        return WifiResult.Failed(string.IsNullOrWhiteSpace(error.Message)
+            ? $"發生未預期的錯誤（0x{error.HResult:X8}），請手動選店。"
+            : error.Message);
+    }
+
     private void NotifyResult(WifiResult result) => Notify(
         result.Snoozed ? $"{result.Message}\n已暫停自動連線 10 分鐘，點這則通知可立即重試。" : result.Message,
         retryOnClick: result.Snoozed);
@@ -594,7 +631,7 @@ sealed class TrayApp : ApplicationContext
     /// Balloon (a toast on Windows 10/11); the same text within 10 s is shown once.
     private void Notify(string message, bool retryOnClick = false)
     {
-        if (disposed) return;
+        if (disposed || string.IsNullOrWhiteSpace(message)) return;
         var now = Environment.TickCount64;
         if (message == lastBalloon && now - lastBalloonAt < 10_000) return;
         lastBalloon = message;

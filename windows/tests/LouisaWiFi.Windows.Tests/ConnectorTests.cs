@@ -44,6 +44,13 @@ public class ConnectorTests
             Restores++;
             Restored = original;
         }
+
+        public int Disconnects { get; private set; }
+        public void Disconnect()
+        {
+            Disconnects++;
+            Current = null;
+        }
     }
 
     private sealed class MemoryLearned : ILearnedStore
@@ -209,5 +216,6 @@ public class ConnectorTests
             return password == "second";
         }
         public void RestoreLouisaProfile(string ssid, WifiProfileBackup? original) { }
+        public void Disconnect() { }
     }
 }

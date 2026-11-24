@@ -59,16 +59,19 @@ public static class ConnectionPlanner
         return candidates;
     }
 
-    public static IReadOnlyList<StorePasswordCandidate> Nearby(LocationFix location, IReadOnlyList<Store> stores)
-    {
-        var nearby = Stores.Nearest(location.Latitude, location.Longitude, 3, stores)
+    public static IReadOnlyList<StorePasswordCandidate> Nearby(LocationFix location, IReadOnlyList<Store> stores) =>
+        Interleave(Stores.Nearest(location.Latitude, location.Longitude, 3, stores)
             .Where(item => item.Meters < 5000)
             .Select(item => item.Store)
-            .ToList();
+            .ToList());
+
+    /// Every store's first password, then every second one, and so on; duplicates are skipped when tried.
+    public static IReadOnlyList<StorePasswordCandidate> Interleave(IReadOnlyList<Store> stores)
+    {
         var candidates = new List<StorePasswordCandidate>();
-        var maxPasswords = nearby.Count == 0 ? 0 : nearby.Max(store => store.Passwords.Count);
+        var maxPasswords = stores.Count == 0 ? 0 : stores.Max(store => store.Passwords.Count);
         for (var index = 0; index < maxPasswords; index++)
-            foreach (var store in nearby.Where(store => index < store.Passwords.Count))
+            foreach (var store in stores.Where(store => index < store.Passwords.Count))
                 candidates.Add(new StorePasswordCandidate(store, new PasswordCandidate(store.Passwords[index], index)));
         return candidates;
     }
@@ -105,18 +108,22 @@ public sealed class Connector
             ?? throw new InvalidOperationException("手動連線未執行。");
     }
 
+    /// location null: don't use Windows location; recent: stores to try after learned (and nearby) ones.
     public Task<WifiResult?> AutoConnectAsync(
-        ILocationProvider location,
+        ILocationProvider? location,
         IReadOnlyList<Store> stores,
+        IReadOnlyList<Store>? recent = null,
         CancellationToken cancellationToken = default) =>
-        RunAsync(true, token => AutoConnectCoreAsync(location, stores, manual: false, token), cancellationToken);
+        RunAsync(true, token => AutoConnectCoreAsync(location, stores, recent, manual: false, token), cancellationToken);
 
-    /// Menu/CLI "nearest store": same search as auto-connect, but a user action, so it ignores snoozes and the switch.
+    /// Menu/CLI "nearest store": same search as auto-connect, but a user action, so it ignores snoozes and the switch,
+    /// and interrupts another network Windows is still joining.
     public async Task<WifiResult> ConnectNearestAsync(
         ILocationProvider location,
         IReadOnlyList<Store> stores,
+        IReadOnlyList<Store>? recent = null,
         CancellationToken cancellationToken = default) =>
-        await RunAsync(false, token => AutoConnectCoreAsync(location, stores, manual: true, token), cancellationToken)
+        await RunAsync(false, token => AutoConnectCoreAsync(location, stores, recent, manual: true, token), cancellationToken)
             ?? throw new InvalidOperationException("手動連線未執行。");
 
     /// Store names that have worked here before (learned base stations).
@@ -203,6 +210,8 @@ public sealed class Connector
         // Like macOS: choosing a store leaves another Wi-Fi (e.g. a hotspot); only keep a non-Wi-Fi internet link.
         if (current is null && wifi.HasInternet)
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
+        // A join in progress can make the scan fail; the user chose a store, so stop it first.
+        if (current is { Joining: true }) StopJoining(current);
 
         WifiScan? scan = null;
         if (wifi.CanReadBssid)
@@ -238,8 +247,9 @@ public sealed class Connector
     }
 
     private async Task<WifiResult?> AutoConnectCoreAsync(
-        ILocationProvider location,
+        ILocationProvider? location,
         IReadOnlyList<Store> stores,
+        IReadOnlyList<Store>? recent,
         bool manual,
         CancellationToken cancellationToken)
     {
@@ -252,7 +262,13 @@ public sealed class Connector
             return CurrentLouisa(current);
         if (wifi.HasInternet)
             return Report(WifiResult.Idle("目前已可上網，保留現有連線。"));
-        if (current is not null)
+        if (current is { Joining: true })
+        {
+            // Never interrupt on our own: the user may be joining a hotspot on purpose.
+            if (!manual) return Report(WifiResult.Joining(current.Ssid));
+            StopJoining(current);
+        }
+        else if (current is not null)
             return Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
         if (!wifi.CanReadBssid)
             return Report(WifiResult.Idle("Windows 未授權 Wi-Fi 定位資訊，請開啟定位設定或手動選店。"));
@@ -283,26 +299,43 @@ public sealed class Connector
             var result = await TryCandidatesAsync(known, attempt, cancellationToken);
             if (result is not null) return result;
 
-            var position = await location.GetLocationAsync(cancellationToken);
-            if (position.Fix is { } fix && fix.IsUsable(clock.GetUtcNow()))
+            string? unusable = null;
+            if (location is null)
+                unusable = "未使用定位";
+            else
             {
-                var nearby = ConnectionPlanner.Nearby(fix, stores);
-                Trace?.Invoke($"定位可用，5 公里內 {nearby.Select(c => c.Store.Name).Distinct().Count()} 家門市");
-                result = await TryCandidatesAsync(nearby, attempt, cancellationToken);
+                var position = await location.GetLocationAsync(cancellationToken);
+                if (position.Fix is { } fix && fix.IsUsable(clock.GetUtcNow()))
+                {
+                    var nearby = ConnectionPlanner.Nearby(fix, stores);
+                    Trace?.Invoke($"定位可用，5 公里內 {nearby.Select(c => c.Store.Name).Distinct().Count()} 家門市");
+                    if (nearby.Count == 0) unusable = "5 公里內找不到路易莎門市，請手動選店。";
+                    result = await TryCandidatesAsync(nearby, attempt, cancellationToken);
+                    if (result is not null) return result;
+                }
+                else
+                {
+                    unusable = position.UnavailableReason ?? (position.Fix is null
+                        ? "無法辨識門市，請手動選店。"
+                        : "定位已過期或誤差達 500 公尺以上，請手動選店。");
+                    Trace?.Invoke($"定位不可用：{unusable}");
+                }
+            }
+
+            if (recent is { Count: > 0 })
+            {
+                Trace?.Invoke($"改試最近去過的門市：{string.Join("、", recent.Select(store => store.Name))}");
+                result = await TryCandidatesAsync(ConnectionPlanner.Interleave(recent), attempt, cancellationToken);
                 if (result is not null) return result;
             }
-            else Trace?.Invoke($"定位不可用：{position.UnavailableReason ?? (position.Fix is null ? "沒有定位" : "已過期或誤差達 500 公尺以上")}");
+            else if (location is null)
+                Trace?.Invoke("未使用定位，也沒有最近去過的門市");
 
             result = ExistingConnection(attempt);
             if (result is not null) return result;
             // Like macOS runAuto: nothing to try also notifies and snoozes this base station.
             if (attempt.Tried.Count == 0)
-                return Snooze(key, position.Fix is { } usable && usable.IsUsable(clock.GetUtcNow())
-                    ? "5 公里內找不到路易莎門市，請手動選店。"
-                    : position.UnavailableReason ??
-                      (position.Fix is null
-                          ? "無法辨識門市，請手動選店。"
-                          : "定位已過期或誤差達 500 公尺以上，請手動選店。"));
+                return Snooze(key, location is null ? "還沒有最近去過的門市，請手動選店。" : unusable ?? "無法辨識門市，請手動選店。");
 
             return Snooze(key, "自動連線失敗，請手動選擇門市。");
         }
@@ -375,6 +408,12 @@ public sealed class Connector
         return null;
     }
 
+    private void StopJoining(WifiConnection joining)
+    {
+        Trace?.Invoke($"中斷 Windows 正在連線的 {joining.Ssid}，改連路易莎 Wi-Fi。");
+        wifi.Disconnect();
+    }
+
     private WifiResult? ExistingConnection(Attempt attempt)
     {
         if (wifi.Current is { } current)
@@ -382,7 +421,7 @@ public sealed class Connector
             if (LouisaNetwork.IsLouisa(current.Ssid))
                 return ConnectedDuringAttempt(attempt, current);
             if (attempt.Automatic)
-                return Report(WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
+                return Report(current.Joining ? WifiResult.Joining(current.Ssid) : WifiResult.Idle("目前已連線，保留現有 Wi-Fi。"));
             return null;
         }
         return wifi.HasInternet ? Report(WifiResult.Idle("目前已可上網，保留現有連線。")) : null;

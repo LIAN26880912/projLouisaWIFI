@@ -22,11 +22,14 @@ public sealed class NativeWifiAdapter : IWifi
                 if (result.Item2 is { } connection && !string.IsNullOrEmpty(connection.Ssid.ToString()))
                 {
                     // Windows reports the SSID while still authenticating (e.g. retrying an old store's
-                    // password); that must not stop us trying this store's. Other networks keep it, so we
-                    // don't hijack e.g. a hotspot mid-join.
-                    if (connection.InterfaceState != InterfaceState.Connected && LouisaNetwork.IsLouisa(connection.Ssid.ToString()))
+                    // password); that must not stop us trying this store's. Another network mid-join is
+                    // reported as Joining so the user can be asked before it is interrupted.
+                    var joiningSsid = connection.Ssid.ToString();
+                    var joining = connection.InterfaceState is
+                        InterfaceState.Associating or InterfaceState.Discovering or InterfaceState.Authenticating;
+                    if (connection.InterfaceState != InterfaceState.Connected && LouisaNetwork.IsLouisa(joiningSsid))
                         return null;
-                    return new WifiConnection(connection.Ssid.ToString(), connection.Bssid.ToString());
+                    return new WifiConnection(joiningSsid, connection.Bssid.ToString(), joining);
                 }
             }
             if (!radio.IsConnected) return null;
@@ -115,6 +118,12 @@ public sealed class NativeWifiAdapter : IWifi
             throw new InvalidOperationException($"無法還原原本的 {ssid} Wi-Fi 設定。");
         if (!NativeWifi.SetProfilePosition(id, ssid, original.Position))
             throw new InvalidOperationException("已還原 Wi-Fi 設定，但無法還原原本的連線優先順序。");
+    }
+
+    public void Disconnect()
+    {
+        if (!NativeWifi.DisconnectNetwork(InterfaceId()))
+            throw new InvalidOperationException("Windows 無法中斷目前的 Wi-Fi 連線。");
     }
 
     private static Guid InterfaceId() =>

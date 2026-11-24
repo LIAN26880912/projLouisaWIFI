@@ -83,6 +83,19 @@ public class UsageTests
     }
 
     [Fact]
+    public void StoresByRecencyPutsLatestVisitFirstAndSkipsUnknownAndBadDays()
+    {
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> usage = new Dictionary<string, IReadOnlyDictionary<string, double>>
+        {
+            ["2026-01-01"] = new Dictionary<string, double> { ["甲"] = 9000, ["乙"] = 60 },
+            ["2026-01-03"] = new Dictionary<string, double> { ["丙"] = 60, ["丁"] = 600, [UsageTracker.UnknownStore] = 900, ["戊"] = 0 },
+            ["bad-key"] = new Dictionary<string, double> { ["己"] = 60 }
+        };
+
+        Assert.Equal(["丁", "丙", "甲", "乙"], UsageStats.StoresByRecency(usage));
+    }
+
+    [Fact]
     public void TotalsStreakAndFormattingMatchTheMacApp()
     {
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> usage = new Dictionary<string, IReadOnlyDictionary<string, double>>
